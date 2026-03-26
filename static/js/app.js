@@ -245,16 +245,28 @@ async function addSuggestedFeed(url, category, btn) {
 // ==================== Top Stories ====================
 function renderTopStories(articles) {
     if (!elements.topStories || !articles.length) return;
-    // Take most recent article from each of the first 4 unique categories
+    // Take most recent article from each unique category (up to 6),
+    // then fill remaining slots from other articles to always show 6.
+    const sorted = [...articles].sort((a, b) => new Date(b.published) - new Date(a.published));
     const seen = new Set();
     const picks = [];
-    [...articles].sort((a, b) => new Date(b.published) - new Date(a.published));
-    for (const art of articles) {
+    for (const art of sorted) {
         if (!seen.has(art.category)) {
             seen.add(art.category);
             picks.push(art);
         }
-        if (picks.length >= 4) break;
+        if (picks.length >= 6) break;
+    }
+    // If fewer than 6 unique categories, fill with next most-recent articles
+    if (picks.length < 6) {
+        const pickedLinks = new Set(picks.map(a => a.link));
+        for (const art of sorted) {
+            if (!pickedLinks.has(art.link)) {
+                picks.push(art);
+                pickedLinks.add(art.link);
+            }
+            if (picks.length >= 6) break;
+        }
     }
     if (picks.length === 0) return;
     elements.topStoriesCards.innerHTML = picks.map(art => `
