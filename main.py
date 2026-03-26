@@ -33,6 +33,13 @@ app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 300}
 
+@app.before_request
+def redirect_www():
+    """Redirect www.optio.news → optio.news"""
+    if request.host.startswith('www.'):
+        url = request.url.replace('www.', '', 1)
+        return redirect(url, code=301)
+
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
