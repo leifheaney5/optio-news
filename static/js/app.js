@@ -80,6 +80,36 @@ async function fetchArticles(forceRefresh = false) {
     }
 }
 
+async function initTicker() {
+    const track = document.getElementById('tickerTrack');
+    if (!track) return;
+    try {
+        const resp = await fetch('/api/articles');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const articles = (data.articles || []).slice(0, 20);
+        if (!articles.length) return;
+
+        // Build double-set for seamless loop
+        const makeItems = () => articles.map(a => {
+            const item = document.createElement('span');
+            item.className = 'ticker-item';
+            item.textContent = a.title;
+            item.addEventListener('click', () => window.open(a.url, '_blank', 'noopener'));
+            const sep = document.createElement('span');
+            sep.className = 'ticker-sep';
+            sep.textContent = ' ◆ ';
+            const wrap = document.createDocumentFragment();
+            wrap.appendChild(item);
+            wrap.appendChild(sep);
+            return wrap;
+        });
+
+        makeItems().forEach(f => track.appendChild(f));
+        makeItems().forEach(f => track.appendChild(f)); // duplicate for loop
+    } catch (e) { /* ticker is non-critical */ }
+}
+
 async function fetchTrendingTopics() {
     try {
         const sidebarLoading = document.getElementById('sidebarLoading');
@@ -242,7 +272,33 @@ function renderTopStories(articles) {
     elements.topStories.style.display = 'block';
 }
 
+// ==================== Toast ====================
+function showToast(message, type = 'success') {
+    let el = document.getElementById('appToast');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'appToast';
+        el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:10px 20px;border-radius:8px;font-size:.9rem;font-weight:500;z-index:9999;opacity:0;transition:opacity .25s;pointer-events:none;';
+        document.body.appendChild(el);
+    }
+    el.textContent = message;
+    el.style.background = type === 'error' ? '#d9534f' : '#28a745';
+    el.style.color = '#fff';
+    el.style.opacity = '1';
+    clearTimeout(el._t);
+    el._t = setTimeout(() => { el.style.opacity = '0'; }, 2500);
+}
+
 // ==================== Bookmark Button ====================
+async function loadBookmarkedUrls() {
+    try {
+        const res = await fetch('/api/bookmarks');
+        if (!res.ok) return;
+        const data = await res.json();
+        (data.bookmarks || []).forEach(b => bookmarkedUrls.add(b.url));
+    } catch { /* non-critical */ }
+}
+
 async function bookmarkArticle(article, btn) {
     if (btn) { btn.disabled = true; }
     try {
@@ -258,11 +314,21 @@ async function bookmarkArticle(article, btn) {
             body: JSON.stringify(payload)
         });
         if (res.ok) {
-            bookmarkedUrls.add(article.link);
-            if (btn) { btn.classList.add('bookmarked'); btn.title = 'Bookmarked'; }
+            const data = await res.json();
+            if (data.id) {
+                bookmarkedUrls.add(article.link);
+                if (btn) { btn.classList.add('bookmarked'); btn.title = 'Bookmarked'; btn.disabled = false; }
+                showToast('Bookmark saved');
+            } else {
+                throw new Error('Unexpected response');
+            }
+        } else {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.error || `Error ${res.status}`);
         }
-    } catch {
+    } catch (e) {
         if (btn) { btn.disabled = false; }
+        showToast(e.message || 'Could not save bookmark', 'error');
     }
 }
 
@@ -600,6 +666,12 @@ async function init() {
     
     // Load trending topics
     await fetchTrendingTopics();
+
+    // Pre-load bookmarked URLs so buttons reflect saved state
+    await loadBookmarkedUrls();
+
+    // Populate breaking news ticker
+    await initTicker();
     
     // Start auto-refresh
     startAutoRefresh();
