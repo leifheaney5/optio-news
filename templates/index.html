@@ -23,15 +23,25 @@
                     </div>
                 </div>
                 <div class="header-controls">
+                    <a href="/bookmarks" class="manage-feeds-btn" title="Bookmarks">
+                        <i class="fas fa-bookmark"></i>
+                    </a>
                     <a href="/feeds" class="manage-feeds-btn" title="Manage feeds">
                         <i class="fas fa-cog"></i>
                     </a>
+                    <button class="view-toggle" id="viewToggle" title="Toggle list/grid view">
+                        <i class="fas fa-list"></i>
+                    </button>
                     <button class="theme-toggle" id="themeToggle" title="Toggle theme">
                         <i class="fas fa-moon"></i>
                     </button>
                     <button class="refresh-btn" id="refreshBtn" title="Refresh articles">
                         <i class="fas fa-sync-alt"></i>
                     </button>
+                    <a href="/logout" class="user-menu" title="Sign out ({{ user.email }})">
+                        <i class="fas fa-user-circle"></i>
+                        <span class="user-email">{{ user.email }}</span>
+                    </a>
                 </div>
             </div>
         </div>
@@ -87,6 +97,26 @@
                     </button>
                     {% endfor %}
                 </div>
+            </div>
+
+            <!-- Suggestions Strip (If You Like...) -->
+            <div class="suggestions-strip" id="suggestionsStrip" style="display:none;">
+                <div class="suggestions-header">
+                    <i class="fas fa-plus-circle"></i>
+                    <span>If you like <strong id="suggestionsCategoryLabel"></strong>, you might also enjoy:</span>
+                    <button class="suggestions-dismiss" id="suggestionsDismiss" title="Dismiss">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="suggestions-cards" id="suggestionsCards"></div>
+            </div>
+
+            <!-- Top Stories -->
+            <div class="top-stories" id="topStories" style="display:none;">
+                <div class="top-stories-header">
+                    <i class="fas fa-star"></i> Top Stories
+                </div>
+                <div class="top-stories-cards" id="topStoriesCards"></div>
             </div>
 
             <!-- Stats Bar -->

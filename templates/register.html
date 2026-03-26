@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Account - Optio News</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <div class="auth-page">
+        <div class="auth-card">
+            <div class="auth-logo">
+                <i class="fas fa-newspaper logo-icon"></i>
+                <h1>Optio News</h1>
+                <p>Stay informed, stay ahead.</p>
+            </div>
+
+            <h2 class="auth-title">Create your account</h2>
+
+            {% with messages = get_flashed_messages(with_categories=true) %}
+              {% for category, message in messages %}
+                <div class="auth-alert auth-alert--{{ category }}">
+                    <i class="fas fa-exclamation-circle"></i> {{ message }}
+                </div>
+              {% endfor %}
+            {% endwith %}
+
+            <form class="auth-form" method="POST" action="{{ url_for('register') }}">
+                <div class="auth-field">
+                    <label for="email">Email address</label>
+                    <div class="auth-input-wrap">
+                        <i class="fas fa-envelope"></i>
+                        <input type="email" id="email" name="email" placeholder="you@example.com" required autofocus>
+                    </div>
+                </div>
+                <div class="auth-field">
+                    <label for="password">Password</label>
+                    <div class="auth-input-wrap">
+                        <i class="fas fa-lock"></i>
+                        <input type="password" id="password" name="password" placeholder="Min. 8 characters" required>
+                    </div>
+                </div>
+                <div class="auth-field">
+                    <label for="confirm_password">Confirm password</label>
+                    <div class="auth-input-wrap">
+                        <i class="fas fa-lock"></i>
+                        <input type="password" id="confirm_password" name="confirm_password" placeholder="Repeat your password" required>
+                    </div>
+                </div>
+                <button type="submit" class="auth-btn">
+                    Create Account
+                    <i class="fas fa-arrow-right"></i>
+                </button>
+            </form>
+
+            <p class="auth-switch">
+                Already have an account?
+                <a href="{{ url_for('login') }}">Sign in</a>
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const theme = localStorage.getItem('theme') || 'light';
+        document.documentElement.setAttribute('data-theme', theme);
+    </script>
+</body>
+</html>

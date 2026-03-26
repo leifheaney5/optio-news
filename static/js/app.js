@@ -3,6 +3,8 @@ let allArticles = [];
 let filteredArticles = [];
 let currentCategory = 'all';
 let currentSearch = '';
+let viewMode = localStorage.getItem('viewMode') || 'grid'; // 'grid' | 'list'
+let bookmarkedUrls = new Set(); // track already-bookmarked article URLs
 
 // ==================== DOM Elements ====================
 const elements = {
@@ -16,7 +18,14 @@ const elements = {
     refreshBtn: document.getElementById('refreshBtn'),
     articleCount: document.getElementById('articleCount'),
     feedCount: document.getElementById('feedCount'),
-    lastUpdated: document.getElementById('lastUpdated')
+    lastUpdated: document.getElementById('lastUpdated'),
+    viewToggle: document.getElementById('viewToggle'),
+    suggestionsStrip: document.getElementById('suggestionsStrip'),
+    suggestionsCards: document.getElementById('suggestionsCards'),
+    suggestionsCategoryLabel: document.getElementById('suggestionsCategoryLabel'),
+    suggestionsDismiss: document.getElementById('suggestionsDismiss'),
+    topStories: document.getElementById('topStories'),
+    topStoriesCards: document.getElementById('topStoriesCards')
 };
 
 // ==================== Theme Management ====================
@@ -134,6 +143,129 @@ function renderTrendingTopics(topics) {
     `).join('');
 }
 
+// ==================== View Mode ====================
+function applyViewMode() {
+    const grid = elements.articlesGrid;
+    if (viewMode === 'list') {
+        grid.classList.add('articles-list');
+        grid.classList.remove('articles-grid');
+        if (elements.viewToggle) {
+            elements.viewToggle.querySelector('i').className = 'fas fa-th-large';
+            elements.viewToggle.title = 'Switch to grid view';
+        }
+    } else {
+        grid.classList.remove('articles-list');
+        grid.classList.add('articles-grid');
+        if (elements.viewToggle) {
+            elements.viewToggle.querySelector('i').className = 'fas fa-list';
+            elements.viewToggle.title = 'Switch to list view';
+        }
+    }
+}
+
+function toggleViewMode() {
+    viewMode = viewMode === 'grid' ? 'list' : 'grid';
+    localStorage.setItem('viewMode', viewMode);
+    applyViewMode();
+    renderArticles();
+}
+
+// ==================== Suggestions Strip ====================
+async function fetchSuggestions(category) {
+    if (!elements.suggestionsStrip) return;
+    if (category === 'all') {
+        elements.suggestionsStrip.style.display = 'none';
+        return;
+    }
+    try {
+        const res = await fetch(`/api/feeds/suggestions?category=${encodeURIComponent(category)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.suggestions || data.suggestions.length === 0) {
+            elements.suggestionsStrip.style.display = 'none';
+            return;
+        }
+        if (elements.suggestionsCategoryLabel) elements.suggestionsCategoryLabel.textContent = category;
+        elements.suggestionsCards.innerHTML = data.suggestions.map(s => `
+            <div class="suggestion-card">
+                <div class="suggestion-info">
+                    <span class="suggestion-name">${escapeHtml(s.name || s.url)}</span>
+                    <a href="${escapeHtml(s.url)}" target="_blank" rel="noopener noreferrer" class="suggestion-url">${escapeHtml(s.url.replace(/^https?:\/\//, '').split('/')[0])}</a>
+                </div>
+                <button class="suggestion-add-btn" onclick="addSuggestedFeed('${escapeHtml(s.url)}', '${escapeHtml(category)}', this)">
+                    <i class="fas fa-plus"></i> Follow
+                </button>
+            </div>
+        `).join('');
+        elements.suggestionsStrip.style.display = 'block';
+    } catch (e) {
+        // silently fail
+    }
+}
+
+async function addSuggestedFeed(url, category, btn) {
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+    try {
+        await fetch('/api/feeds/add', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url, category })
+        });
+        if (btn) { btn.innerHTML = '<i class="fas fa-check"></i> Added'; btn.style.background = '#22c55e'; }
+    } catch {
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-plus"></i> Follow'; }
+    }
+}
+
+// ==================== Top Stories ====================
+function renderTopStories(articles) {
+    if (!elements.topStories || !articles.length) return;
+    // Take most recent article from each of the first 4 unique categories
+    const seen = new Set();
+    const picks = [];
+    [...articles].sort((a, b) => new Date(b.published) - new Date(a.published));
+    for (const art of articles) {
+        if (!seen.has(art.category)) {
+            seen.add(art.category);
+            picks.push(art);
+        }
+        if (picks.length >= 4) break;
+    }
+    if (picks.length === 0) return;
+    elements.topStoriesCards.innerHTML = picks.map(art => `
+        <a class="featured-card" href="${escapeHtml(art.link)}" target="_blank" rel="noopener noreferrer">
+            <span class="featured-category">${escapeHtml(art.category)}</span>
+            <h4 class="featured-title">${escapeHtml(art.title)}</h4>
+            <span class="featured-meta"><i class="far fa-clock"></i> ${formatTimeAgo(art.published)} &middot; ${escapeHtml(art.site)}</span>
+        </a>
+    `).join('');
+    elements.topStories.style.display = 'block';
+}
+
+// ==================== Bookmark Button ====================
+async function bookmarkArticle(article, btn) {
+    if (btn) { btn.disabled = true; }
+    try {
+        const payload = {
+            url: article.link,
+            title: article.title,
+            description: article.summary ? article.summary.replace(/<[^>]*>/g, '').substring(0, 200) : '',
+            tags: [article.category]
+        };
+        const res = await fetch('/api/bookmarks', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+            bookmarkedUrls.add(article.link);
+            if (btn) { btn.classList.add('bookmarked'); btn.title = 'Bookmarked'; }
+        }
+    } catch {
+        if (btn) { btn.disabled = false; }
+    }
+}
+
 // ==================== Filter Functions ====================
 function applyFilters() {
     filteredArticles = allArticles.filter(article => {
@@ -165,6 +297,15 @@ function setCategory(category) {
     });
     
     applyFilters();
+
+    // Show suggestions / hide top stories when a category is selected
+    if (category !== 'all') {
+        fetchSuggestions(category);
+        if (elements.topStories) elements.topStories.style.display = 'none';
+    } else {
+        if (elements.suggestionsStrip) elements.suggestionsStrip.style.display = 'none';
+        renderTopStories(allArticles);
+    }
 }
 
 function setSearch(query) {
@@ -190,13 +331,42 @@ function renderArticles() {
     }
     
     hideNoResults();
+    applyViewMode();
     
-    filteredArticles.forEach((article, index) => {
-        const card = createArticleCard(article, index);
-        elements.articlesGrid.appendChild(card);
-    });
+    if (viewMode === 'list') {
+        filteredArticles.forEach((article, index) => {
+            const row = createArticleRow(article, index);
+            elements.articlesGrid.appendChild(row);
+        });
+    } else {
+        filteredArticles.forEach((article, index) => {
+            const card = createArticleCard(article, index);
+            elements.articlesGrid.appendChild(card);
+        });
+    }
     
     elements.articleCount.textContent = filteredArticles.length;
+}
+
+function createArticleRow(article, index) {
+    const row = document.createElement('div');
+    row.className = 'article-row';
+    row.style.animationDelay = `${index * 0.03}s`;
+    const isBookmarked = bookmarkedUrls.has(article.link);
+    row.innerHTML = `
+        <span class="category-badge ${article.category.replace(/\s+/g, '.')}">${escapeHtml(article.category)}</span>
+        <div class="article-row-main">
+            <a class="article-row-title" href="${escapeHtml(article.link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(article.title)}</a>
+            <span class="article-row-meta">${escapeHtml(article.site)} &middot; ${formatTimeAgo(article.published)}</span>
+        </div>
+        <button class="bookmark-btn ${isBookmarked ? 'bookmarked' : ''}" title="${isBookmarked ? 'Bookmarked' : 'Bookmark'}" data-link="${escapeHtml(article.link)}">
+            <i class="${isBookmarked ? 'fas' : 'far'} fa-bookmark"></i>
+        </button>
+    `;
+    row.querySelector('.bookmark-btn').addEventListener('click', function() {
+        bookmarkArticle(article, this);
+    });
+    return row;
 }
 
 function createArticleCard(article, index) {
@@ -213,10 +383,14 @@ function createArticleCard(article, index) {
         ? cleanSummary.substring(0, 200) + '...' 
         : cleanSummary;
     
+    const isBookmarked = bookmarkedUrls.has(article.link);
     card.innerHTML = `
         <div class="article-header">
             <span class="category-badge ${categoryClass}">${escapeHtml(article.category)}</span>
             <div class="article-actions">
+                <button class="bookmark-btn ${isBookmarked ? 'bookmarked' : ''}" title="${isBookmarked ? 'Bookmarked' : 'Bookmark'}">
+                    <i class="${isBookmarked ? 'fas' : 'far'} fa-bookmark"></i>
+                </button>
                 <div class="article-time">
                     <i class="far fa-clock"></i>
                     ${formatTimeAgo(article.published)}
@@ -249,6 +423,9 @@ function createArticleCard(article, index) {
         </div>
     `;
     
+    card.querySelector('.bookmark-btn').addEventListener('click', function() {
+        bookmarkArticle(article, this);
+    });
     return card;
 }
 
@@ -308,7 +485,7 @@ function showLoading() {
 
 function hideLoading() {
     elements.loading.style.display = 'none';
-    elements.articlesGrid.style.display = 'grid';
+    elements.articlesGrid.style.display = viewMode === 'list' ? 'flex' : 'grid';
 }
 
 function showNoResults() {
@@ -367,6 +544,18 @@ function initEventListeners() {
         setSearch('');
     });
     
+    // View toggle
+    if (elements.viewToggle) {
+        elements.viewToggle.addEventListener('click', toggleViewMode);
+    }
+
+    // Suggestions dismiss
+    if (elements.suggestionsDismiss) {
+        elements.suggestionsDismiss.addEventListener('click', () => {
+            if (elements.suggestionsStrip) elements.suggestionsStrip.style.display = 'none';
+        });
+    }
+
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         // Ctrl/Cmd + K: Focus search
@@ -400,8 +589,14 @@ async function init() {
     // Setup event listeners
     initEventListeners();
     
+    // Apply saved view mode
+    applyViewMode();
+
     // Load initial articles
     await fetchArticles();
+
+    // Render top stories (all-category default)
+    renderTopStories(allArticles);
     
     // Load trending topics
     await fetchTrendingTopics();

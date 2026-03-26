@@ -24,6 +24,9 @@
                     </div>
                 </div>
                 <div class="header-controls">
+                    <a href="/bookmarks" class="manage-feeds-btn" title="Bookmarks">
+                        <i class="fas fa-bookmark"></i>
+                    </a>
                     <a href="/" class="btn-back">
                         <i class="fas fa-arrow-left"></i>
                         Back to News
@@ -31,6 +34,10 @@
                     <button class="theme-toggle" id="themeToggle" title="Toggle theme">
                         <i class="fas fa-moon"></i>
                     </button>
+                    <a href="/logout" class="user-menu" title="Sign out ({{ user.email }})">
+                        <i class="fas fa-user-circle"></i>
+                        <span class="user-email">{{ user.email }}</span>
+                    </a>
                 </div>
             </div>
         </div>

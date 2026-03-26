@@ -3,8 +3,13 @@ import time
 import logging
 import feedparser
 import schedule
+import requests as http_requests
 from datetime import datetime, timedelta
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
+from werkzeug.security import generate_password_hash, check_password_hash
+from bs4 import BeautifulSoup
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
@@ -18,6 +23,50 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-change-in-prod')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///optionews.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 300}
+
+db = SQLAlchemy(app)
+login_manager = LoginManager(app)
+login_manager.login_view = 'login'
+
+# ==================== Database Models ====================
+
+class User(UserMixin, db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    feeds = db.relationship('UserFeed', backref='user', lazy=True, cascade='all, delete-orphan')
+    bookmarks = db.relationship('Bookmark', backref='user', lazy=True, cascade='all, delete-orphan')
+
+class UserFeed(db.Model):
+    __tablename__ = 'user_feeds'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    category = db.Column(db.String(64), nullable=False)
+    url = db.Column(db.String(512), nullable=False)
+    is_hidden = db.Column(db.Boolean, default=False)
+    is_added = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Bookmark(db.Model):
+    __tablename__ = 'bookmarks'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    url = db.Column(db.String(2048), nullable=False)
+    title = db.Column(db.String(512), nullable=False)
+    description = db.Column(db.Text)
+    image_url = db.Column(db.String(2048))
+    tags = db.Column(db.JSON, default=list)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+@login_manager.user_loader
+def load_user(user_id):
+    return db.session.get(User, int(user_id))
 
 # Expanded RSS feeds with more categories
 rss_feeds = {
@@ -145,8 +194,28 @@ rss_feeds = {
 articles_cache = []
 cache_timestamp = None
 
-# User's hidden feeds (persisted)
-hidden_feeds = set()
+# ==================== Per-User Feed Helpers ====================
+
+def get_user_hidden_feeds(user_id):
+    """Get set of hidden feed URLs for a given user"""
+    try:
+        rows = UserFeed.query.filter_by(user_id=user_id, is_hidden=True).all()
+        return {row.url for row in rows}
+    except Exception as e:
+        logging.error(f"Error fetching hidden feeds: {e}")
+        return set()
+
+def get_user_added_feeds(user_id):
+    """Returns {category: [url, ...]} for feeds a user has added"""
+    try:
+        rows = UserFeed.query.filter_by(user_id=user_id, is_added=True).all()
+        result = {}
+        for row in rows:
+            result.setdefault(row.category, []).append(row.url)
+        return result
+    except Exception as e:
+        logging.error(f"Error fetching added feeds: {e}")
+        return {}
 
 # Available feeds that users can add
 available_feeds = {
@@ -197,25 +266,6 @@ available_feeds = {
     ]
 }
 
-def load_hidden_feeds():
-    """Load hidden feeds from file"""
-    global hidden_feeds
-    try:
-        if os.path.exists('hidden_feeds.txt'):
-            with open('hidden_feeds.txt', 'r') as f:
-                hidden_feeds = set(line.strip() for line in f if line.strip())
-    except Exception as e:
-        logging.error(f"Error loading hidden feeds: {e}")
-
-def save_hidden_feeds():
-    """Save hidden feeds to file"""
-    try:
-        with open('hidden_feeds.txt', 'w') as f:
-            for feed in hidden_feeds:
-                f.write(f"{feed}\n")
-    except Exception as e:
-        logging.error(f"Error saving hidden feeds: {e}")
-
 def fetch_articles(force_refresh=False):
     """Fetch articles from RSS feeds with caching"""
     global articles_cache, cache_timestamp
@@ -238,11 +288,6 @@ def fetch_articles(force_refresh=False):
     
     for category, urls in rss_feeds.items():
         for url in urls:
-            # Skip hidden feeds
-            if url in hidden_feeds:
-                logging.info(f"Skipping hidden feed: {url}")
-                continue
-                
             logging.info(f"Fetching: {url}")
             feed = feedparser.parse(url)
             if feed.bozo:
@@ -633,39 +678,104 @@ def send_email(html_content):
     except Exception as e:
         logging.error(f"Email error: {e}")
 
-# Flask Routes
+# ==================== Auth Routes ====================
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '')
+        user = User.query.filter_by(email=email).first()
+        if user and check_password_hash(user.password_hash, password):
+            login_user(user)
+            next_page = request.args.get('next')
+            return redirect(next_page or url_for('index'))
+        flash('Invalid email or password.', 'error')
+    return render_template('login.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    if request.method == 'POST':
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '')
+        confirm = request.form.get('confirm_password', '')
+        if not email or not password:
+            flash('Email and password are required.', 'error')
+        elif password != confirm:
+            flash('Passwords do not match.', 'error')
+        elif len(password) < 8:
+            flash('Password must be at least 8 characters.', 'error')
+        elif User.query.filter_by(email=email).first():
+            flash('An account with that email already exists.', 'error')
+        else:
+            user = User(
+                email=email,
+                password_hash=generate_password_hash(password)
+            )
+            db.session.add(user)
+            db.session.commit()
+            login_user(user)
+            return redirect(url_for('index'))
+    return render_template('register.html')
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+# ==================== Flask Routes ====================
+
 @app.route('/')
+@login_required
 def index():
     """Main page route"""
-    return render_template('index.html', categories=list(rss_feeds.keys()))
+    return render_template('index.html', categories=list(rss_feeds.keys()), user=current_user)
 
 @app.route('/feeds')
+@login_required
 def feeds_page():
     """Feed management page"""
-    return render_template('feeds.html')
+    return render_template('feeds.html', user=current_user)
+
+@app.route('/bookmarks')
+@login_required
+def bookmarks_page():
+    """Bookmarks page"""
+    return render_template('bookmarks.html', user=current_user)
 
 @app.route('/api/articles')
+@login_required
 def get_articles_api():
     """API endpoint to fetch articles with filtering"""
     category = request.args.get('category', 'all')
     search = request.args.get('search', '').lower()
-    
+
     articles = fetch_articles()
-    
+
+    # Filter out feeds hidden by this user
+    user_hidden = get_user_hidden_feeds(current_user.id)
+    if user_hidden:
+        articles = [a for a in articles if a.get('feed_url') not in user_hidden]
+
     # Filter by category
     if category != 'all':
         articles = [a for a in articles if a['category'] == category]
-    
+
     # Filter by search term
     if search:
-        articles = [a for a in articles if 
-                   search in a['title'].lower() or 
-                   search in a['summary'].lower()]
-    
+        articles = [a for a in articles if
+                    search in a['title'].lower() or
+                    search in a['summary'].lower()]
+
     # Calculate total active feeds
     total_feeds = sum(len(feeds) for feeds in rss_feeds.values())
-    active_feeds = total_feeds - len(hidden_feeds)
-    
+    active_feeds = total_feeds - len(user_hidden)
+
     return jsonify({
         'articles': articles,
         'count': len(articles),
@@ -674,6 +784,7 @@ def get_articles_api():
     })
 
 @app.route('/api/trending')
+@login_required
 def get_trending_topics():
     """API endpoint to get trending topics from last 24 hours"""
     logging.info("Trending topics API called")
@@ -689,6 +800,7 @@ def get_trending_topics():
     })
 
 @app.route('/api/refresh')
+@login_required
 def refresh_articles():
     """Force refresh articles"""
     articles = fetch_articles(force_refresh=True)
@@ -699,69 +811,61 @@ def refresh_articles():
     })
 
 @app.route('/api/feeds')
+@login_required
 def get_feeds():
-    """Get all RSS feeds with their status"""
+    """Get all RSS feeds with their status for the current user"""
+    user_hidden = get_user_hidden_feeds(current_user.id)
     feeds_list = []
     for category, urls in rss_feeds.items():
         for url in urls:
-            # Extract feed name from URL
             domain = url.split('/')[2] if len(url.split('/')) > 2 else url
             feeds_list.append({
                 'url': url,
                 'category': category,
                 'name': domain,
-                'hidden': url in hidden_feeds
+                'hidden': url in user_hidden
             })
     return jsonify({
         'feeds': feeds_list,
         'total': len(feeds_list),
-        'hidden_count': len(hidden_feeds)
+        'hidden_count': len(user_hidden)
     })
 
 @app.route('/api/feeds/hide', methods=['POST'])
+@login_required
 def hide_feed():
-    """Hide a specific feed"""
+    """Hide a specific feed for the current user"""
     data = request.json
     feed_url = data.get('url')
-    
+    category = data.get('category', '')
     if not feed_url:
         return jsonify({'error': 'URL required'}), 400
-    
-    hidden_feeds.add(feed_url)
-    save_hidden_feeds()
-    
-    # Force refresh articles
-    fetch_articles(force_refresh=True)
-    
-    return jsonify({
-        'success': True,
-        'message': f'Feed hidden: {feed_url}',
-        'hidden_count': len(hidden_feeds)
-    })
+    existing = UserFeed.query.filter_by(user_id=current_user.id, url=feed_url).first()
+    if existing:
+        existing.is_hidden = True
+    else:
+        db.session.add(UserFeed(user_id=current_user.id, category=category, url=feed_url, is_hidden=True))
+    db.session.commit()
+    user_hidden = get_user_hidden_feeds(current_user.id)
+    return jsonify({'success': True, 'message': f'Feed hidden', 'hidden_count': len(user_hidden)})
 
 @app.route('/api/feeds/unhide', methods=['POST'])
+@login_required
 def unhide_feed():
-    """Unhide a specific feed"""
+    """Unhide a specific feed for the current user"""
     data = request.json
     feed_url = data.get('url')
-    
     if not feed_url:
         return jsonify({'error': 'URL required'}), 400
-    
-    if feed_url in hidden_feeds:
-        hidden_feeds.remove(feed_url)
-        save_hidden_feeds()
-        
-        # Force refresh articles
-        fetch_articles(force_refresh=True)
-    
-    return jsonify({
-        'success': True,
-        'message': f'Feed unhidden: {feed_url}',
-        'hidden_count': len(hidden_feeds)
-    })
+    existing = UserFeed.query.filter_by(user_id=current_user.id, url=feed_url).first()
+    if existing:
+        existing.is_hidden = False
+        db.session.commit()
+    user_hidden = get_user_hidden_feeds(current_user.id)
+    return jsonify({'success': True, 'message': f'Feed restored', 'hidden_count': len(user_hidden)})
 
 @app.route('/api/feeds/available')
+@login_required
 def get_available_feeds():
     """Get list of available feeds that can be added"""
     return jsonify({
@@ -769,41 +873,137 @@ def get_available_feeds():
         'total': sum(len(feeds) for feeds in available_feeds.values())
     })
 
+@app.route('/api/feeds/suggestions')
+@login_required
+def get_feed_suggestions():
+    """Return up to 3 unsubscribed available feeds for a given category"""
+    category = request.args.get('category', '')
+    if not category or category not in available_feeds:
+        return jsonify({'suggestions': []})
+    active_urls = set(rss_feeds.get(category, []))
+    suggestions = [
+        f for f in available_feeds[category]
+        if f['url'] not in active_urls
+    ][:3]
+    return jsonify({'suggestions': suggestions, 'category': category})
+
 @app.route('/api/feeds/add', methods=['POST'])
+@login_required
 def add_feed():
-    """Add a new feed to the active feeds"""
+    """Add a new feed to the active feeds (persisted in DB + global dict)"""
     data = request.json
     feed_url = data.get('url')
     category = data.get('category')
-    
     if not feed_url or not category:
         return jsonify({'error': 'URL and category required'}), 400
-    
     if category not in rss_feeds:
         return jsonify({'error': 'Invalid category'}), 400
-    
-    # Add feed to the category if not already present
+    # Add to global dict so all users benefit immediately
     if feed_url not in rss_feeds[category]:
         rss_feeds[category].append(feed_url)
-        
-        # Remove from hidden feeds if it was hidden
-        if feed_url in hidden_feeds:
-            hidden_feeds.remove(feed_url)
-            save_hidden_feeds()
-        
-        # Force refresh articles
-        fetch_articles(force_refresh=True)
-        
-        return jsonify({
-            'success': True,
-            'message': f'Feed added to {category}',
-            'url': feed_url
-        })
+    # Persist to DB for this user
+    existing = UserFeed.query.filter_by(user_id=current_user.id, url=feed_url).first()
+    if existing:
+        existing.is_added = True
+        existing.is_hidden = False
     else:
+        db.session.add(UserFeed(user_id=current_user.id, category=category, url=feed_url, is_added=True))
+    db.session.commit()
+    fetch_articles(force_refresh=True)
+    return jsonify({'success': True, 'message': f'Feed added to {category}', 'url': feed_url})
+
+# ==================== Preview API ====================
+
+@app.route('/api/preview')
+@login_required
+def preview_url():
+    """Fetch og: metadata for a given URL (ported from Webmark's preview.js)"""
+    url = request.args.get('url', '').strip()
+    if not url:
+        return jsonify({'error': 'url parameter required'}), 400
+    try:
+        resp = http_requests.get(url, timeout=8, headers={
+            'User-Agent': 'Mozilla/5.0 (compatible; OptioBotPreview/1.0)'
+        })
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'lxml')
+        def og(prop):
+            tag = soup.find('meta', property=f'og:{prop}') or soup.find('meta', attrs={'name': prop})
+            return tag['content'].strip() if tag and tag.get('content') else ''
+        title = og('title') or (soup.title.string.strip() if soup.title else '') or url
         return jsonify({
-            'success': False,
-            'message': 'Feed already exists'
-        }), 400
+            'title': title,
+            'description': og('description'),
+            'image': og('image'),
+            'site_name': og('site_name'),
+            'url': url
+        })
+    except Exception as e:
+        logging.warning(f"Preview fetch failed for {url}: {e}")
+        return jsonify({'title': '', 'description': '', 'image': '', 'site_name': '', 'url': url})
+
+# ==================== Bookmarks API ====================
+
+def _bookmark_to_dict(b):
+    return {
+        'id': b.id,
+        'url': b.url,
+        'title': b.title,
+        'description': b.description,
+        'image_url': b.image_url,
+        'tags': b.tags or [],
+        'created_at': b.created_at.isoformat()
+    }
+
+@app.route('/api/bookmarks', methods=['GET'])
+@login_required
+def get_bookmarks():
+    bmarks = Bookmark.query.filter_by(user_id=current_user.id).order_by(Bookmark.created_at.desc()).all()
+    return jsonify({'bookmarks': [_bookmark_to_dict(b) for b in bmarks]})
+
+@app.route('/api/bookmarks', methods=['POST'])
+@login_required
+def create_bookmark():
+    data = request.json or {}
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({'error': 'url required'}), 400
+    title = data.get('title', '').strip() or url
+    b = Bookmark(
+        user_id=current_user.id,
+        url=url,
+        title=title,
+        description=data.get('description', ''),
+        image_url=data.get('image_url', ''),
+        tags=data.get('tags', [])
+    )
+    db.session.add(b)
+    db.session.commit()
+    return jsonify(_bookmark_to_dict(b)), 201
+
+@app.route('/api/bookmarks/<int:bookmark_id>', methods=['PUT'])
+@login_required
+def update_bookmark(bookmark_id):
+    b = Bookmark.query.filter_by(id=bookmark_id, user_id=current_user.id).first_or_404()
+    data = request.json or {}
+    if 'title' in data:
+        b.title = data['title'].strip() or b.title
+    if 'description' in data:
+        b.description = data['description']
+    if 'tags' in data:
+        b.tags = data['tags']
+    if 'image_url' in data:
+        b.image_url = data['image_url']
+    db.session.commit()
+    return jsonify(_bookmark_to_dict(b))
+
+@app.route('/api/bookmarks/<int:bookmark_id>', methods=['DELETE'])
+@login_required
+def delete_bookmark(bookmark_id):
+    b = Bookmark.query.filter_by(id=bookmark_id, user_id=current_user.id).first_or_404()
+    db.session.delete(b)
+    db.session.commit()
+    return jsonify({'success': True})
 
 # ==================== Scheduled Job ====================
 
@@ -827,14 +1027,22 @@ def run_scheduler():
 schedule.every().day.at("09:00").do(job)
 
 if __name__ == "__main__":
-    # Load hidden feeds
-    load_hidden_feeds()
-    logging.info(f"Loaded {len(hidden_feeds)} hidden feeds")
-    
+    with app.app_context():
+        db.create_all()
+        # Re-hydrate global rss_feeds with any feeds users have added in previous sessions
+        try:
+            added_rows = UserFeed.query.filter_by(is_added=True).all()
+            for row in added_rows:
+                if row.category in rss_feeds and row.url not in rss_feeds[row.category]:
+                    rss_feeds[row.category].append(row.url)
+            logging.info(f"Loaded {len(added_rows)} user-added feeds into rss_feeds")
+        except Exception as e:
+            logging.warning(f"Could not load user-added feeds on startup: {e}")
+
     # Start scheduler in background thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
-    
-    # Start Flask web server (articles will be fetched on first request)
+
+    # Start Flask web server
     logging.info("Starting web server at http://localhost:5000")
     app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bookmarks - Optio News</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/feeds.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/bookmarks.css') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo-section">
+                    <i class="fas fa-newspaper logo-icon"></i>
+                    <div>
+                        <h1 class="logo">Optio News</h1>
+                        <p class="tagline">Stay informed, stay ahead.</p>
+                    </div>
+                </div>
+                <div class="header-controls">
+                    <a href="/" class="btn-back">
+                        <i class="fas fa-arrow-left"></i>
+                        Back to News
+                    </a>
+                    <a href="/feeds" class="manage-feeds-btn" title="Manage feeds">
+                        <i class="fas fa-cog"></i>
+                    </a>
+                    <button class="theme-toggle" id="themeToggle" title="Toggle theme">
+                        <i class="fas fa-moon"></i>
+                    </button>
+                    <a href="/logout" class="user-menu" title="Sign out ({{ user.email }})">
+                        <i class="fas fa-user-circle"></i>
+                        <span class="user-email">{{ user.email }}</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <div class="container">
+            <div class="page-header">
+                <h2><i class="fas fa-bookmark"></i> Bookmarks</h2>
+                <p>Your saved articles and links</p>
+            </div>
+
+            <!-- Toolbar -->
+            <div class="bm-toolbar">
+                <div class="search-box" style="flex:1; max-width:420px;">
+                    <i class="fas fa-search search-icon"></i>
+                    <input type="text" id="bmSearch" placeholder="Search bookmarks..." class="search-input">
+                </div>
+                <div class="bm-tag-filters" id="bmTagFilters"></div>
+                <div class="bm-actions">
+                    <button class="bm-export-btn" id="exportMd" title="Export as Markdown">
+                        <i class="fas fa-file-alt"></i> Export
+                    </button>
+                    <button class="btn-add-bm" id="openAddModal">
+                        <i class="fas fa-plus"></i> Add Bookmark
+                    </button>
+                </div>
+            </div>
+
+            <!-- Bookmarks Grid -->
+            <div class="loading" id="bmLoading">
+                <div class="spinner"></div>
+                <p>Loading bookmarks...</p>
+            </div>
+
+            <div class="feeds-grid" id="bmGrid" style="display:none;"></div>
+
+            <div class="no-results" id="bmEmpty" style="display:none;">
+                <i class="fas fa-bookmark"></i>
+                <h3>No bookmarks yet</h3>
+                <p>Save articles from the news feed or add links manually.</p>
+            </div>
+        </div>
+    </main>
+
+    <!-- Add/Edit Bookmark Modal -->
+    <div class="bm-modal-overlay" id="bmModalOverlay" style="display:none;">
+        <div class="bm-modal">
+            <div class="bm-modal-header">
+                <h3 id="bmModalTitle">Add Bookmark</h3>
+                <button class="bm-modal-close" id="bmModalClose"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="bm-modal-body">
+                <input type="hidden" id="bmEditId">
+                <div class="auth-field">
+                    <label>URL</label>
+                    <div class="auth-input-wrap">
+                        <i class="fas fa-link"></i>
+                        <input type="url" id="bmUrl" placeholder="https://example.com/article">
+                    </div>
+                    <button class="bm-fetch-btn" id="bmFetchMeta" type="button">
+                        <i class="fas fa-magic"></i> Auto-fill
+                    </button>
+                </div>
+                <div class="auth-field">
+                    <label>Title</label>
+                    <div class="auth-input-wrap">
+                        <i class="fas fa-heading"></i>
+                        <input type="text" id="bmTitle" placeholder="Article title">
+                    </div>
+                </div>
+                <div class="auth-field">
+                    <label>Description</label>
+                    <textarea id="bmDescription" class="bm-textarea" placeholder="Optional notes..."></textarea>
+                </div>
+                <div class="auth-field">
+                    <label>Tags <span style="font-weight:400;font-size:.8rem;">(comma-separated)</span></label>
+                    <div class="auth-input-wrap">
+                        <i class="fas fa-tags"></i>
+                        <input type="text" id="bmTags" placeholder="tech, news, finance">
+                    </div>
+                </div>
+            </div>
+            <div class="bm-modal-footer">
+                <button class="bm-cancel-btn" id="bmModalCancel">Cancel</button>
+                <button class="auth-btn" id="bmModalSave" style="width:auto;padding:.6rem 1.5rem;">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2025 Optio News. Stay informed, stay ahead.</p>
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/bookmarks.js') }}"></script>
+</body>
+</html>
