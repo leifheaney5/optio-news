@@ -372,35 +372,9 @@ def fetch_articles(force_refresh=False):
 
 def extract_trending_topics(articles, top_n=10):
     """
-    Extract trending topics from articles using keyword frequency analysis.
-    
-    This function analyzes articles from the last 24 hours to identify trending topics
-    by counting word and phrase frequencies. It filters out common stopwords and generic
-    terms to surface more meaningful trends.
-    
-    Algorithm:
-    1. Filter articles to only include those from the last 24 hours
-    2. Extract and clean text from titles and summaries (remove HTML entities)
-    3. Count frequencies of:
-       - Individual words (minimum 4 characters, appearing at least 4 times)
-       - Two-word phrases (appearing at least 3 times)
-       - Three-word phrases (appearing at least 3 times)
-    4. Weight phrases 2x higher than single words (more specific = more relevant)
-    5. Filter out generic patterns like "read more", "click here", etc.
-    6. Return top N topics with their mention counts and related articles
-    
-    Args:
-        articles: List of article dictionaries with 'title', 'summary', 'published', 'link'
-        top_n: Number of top trending topics to return (default: 10)
-    
-    Returns:
-        List of dictionaries with keys:
-        - topic: The trending keyword or phrase
-        - count: Number of mentions across articles
-        - articles: List of related articles (up to 3) with title and link
+    Extract trending topics using named-entity heuristics + article-spread scoring.
+    Prefers proper nouns (people, places, orgs, events) spread across many articles.
     """
-    
-    # Filter articles from last 24 hours
     now = datetime.now()
     recent_articles = []
     for article in articles:
@@ -409,232 +383,214 @@ def extract_trending_topics(articles, top_n=10):
             if now - pub_date <= timedelta(hours=24):
                 recent_articles.append(article)
         except (ValueError, KeyError):
-            # If date parsing fails, skip this article
             continue
-    
+
     if not recent_articles:
         return []
-    
-    # Common stopwords to ignore (simple list)
-    stop_words = {
-        # Articles, conjunctions, prepositions
-        'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
-        'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
-        'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
-        'would', 'could', 'should', 'may', 'might', 'must', 'can', 'this',
-        'that', 'these', 'those', 'it', 'its', 'their', 'there', 'here',
-        
-        # News-specific words
-        'said', 'says', 'new', 'news', 'report', 'reports', 'reported', 
-        'today', 'yesterday', 'week', 'month', 'year', 'day', 'time',
-        'article', 'articles', 'story', 'stories', 'post', 'update', 'updates',
-        
-        # Common verbs and adverbs
-        'more', 'most', 'also', 'just', 'now', 'get', 'gets', 'got', 'getting',
-        'one', 'two', 'three', 'first', 'second', 'third', 'last', 'next',
-        'after', 'over', 'according', 'about', 'up', 'out', 'all', 'years',
-        'going', 'make', 'makes', 'made', 'making', 'see', 'sees', 'saw', 'seen',
-        'way', 'back', 'many', 'much', 'how', 'take', 'takes', 'took', 'taken',
-        
-        # Question words and pronouns
-        'what', 'when', 'where', 'who', 'why', 'which', 'whose', 'whom',
-        'than', 'then', 'them', 'his', 'her', 'she', 'he', 'they', 'we', 
-        'you', 'your', 'our', 'my', 'me', 'him', 'them', 'us', 'their',
-        
-        # Direction and position words
-        'into', 'through', 'during', 'before', 'after', 'above', 'below', 
-        'between', 'under', 'behind', 'front', 'inside', 'outside',
-        
-        # Quantifiers and determiners
-        'each', 'few', 'some', 'such', 'only', 'own', 'same', 'so', 'than', 
-        'too', 'very', 'dont', 'doesnt', 'didnt', 'wont', 'wouldnt', 'cant',
-        'every', 'any', 'both', 'either', 'neither', 'other', 'another',
-        
-        # Generic business/company terms
-        'company', 'companies', 'business', 'businesses', 'corporation', 'inc',
-        'corp', 'ltd', 'llc', 'group', 'international', 'global', 'national',
-        
-        # Time-related generic terms
-        'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
-        'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
-        'september', 'october', 'november', 'december',
-        
-        # Numbers and quantities
-        'million', 'billion', 'trillion', 'thousand', 'hundred', 'thousand',
-        'percent', 'per', 'cent', 'number', 'numbers',
-        
-        # Common adjectives
-        'good', 'bad', 'great', 'big', 'small', 'large', 'little', 'high', 
-        'low', 'long', 'short', 'old', 'young', 'early', 'late', 'best', 
-        'worst', 'better', 'worse', 'less', 'least', 'right', 'wrong',
-        
-        # Generic people/place terms
-        'people', 'person', 'man', 'woman', 'men', 'women', 'child', 'children',
-        'world', 'country', 'countries', 'city', 'cities', 'state', 'states',
-        'place', 'area', 'region',
-        
-        # Media/tech generic terms
-        'video', 'videos', 'image', 'images', 'photo', 'photos', 'picture',
-        'show', 'shows', 'watch', 'watching', 'read', 'reading',
-        
-        # HTML entities and common artifacts
-        'nbsp', 'amp', 'quot', 'apos', 'lt', 'gt', 'copy', 'reg', 'trade',
-        'hellip', 'mdash', 'ndash', 'rsquo', 'lsquo', 'rdquo', 'ldquo',
-        
-        # Action verbs (too generic)
-        'get', 'put', 'set', 'use', 'find', 'give', 'tell', 'ask', 'work',
-        'seem', 'feel', 'try', 'leave', 'call', 'want', 'need', 'become',
-        'let', 'begin', 'help', 'talk', 'turn', 'start', 'show', 'hear',
-        'play', 'run', 'move', 'live', 'believe', 'bring', 'happen', 'write',
-        'provide', 'sit', 'stand', 'lose', 'pay', 'meet', 'include', 'continue',
-        
-        # Website/online terms
-        'https', 'http', 'www', 'com', 'net', 'org', 'html', 'pdf', 'jpg',
-        'png', 'gif', 'link', 'click', 'share', 'tweet', 'post', 'comment',
-        
-        # Generic modal/linking words
-        'not', 'no', 'yes', 'well', 'still', 'even', 'however', 'therefore',
-        'thus', 'hence', 'moreover', 'furthermore', 'meanwhile', 'otherwise',
-        'instead', 'rather', 'quite', 'almost', 'already', 'always', 'never',
-        'often', 'sometimes', 'usually', 'really', 'actually', 'literally'
+
+    # ── Stopwords ────────────────────────────────────────────────────────────
+    STOP = {
+        # articles / conjunctions / prepositions
+        'the','a','an','and','or','but','in','on','at','to','for','of','with',
+        'by','from','as','is','was','are','were','be','been','being','have',
+        'has','had','do','does','did','will','would','could','should','may',
+        'might','must','can','this','that','these','those','it','its',
+        # pronouns
+        'their','there','here','his','her','she','he','they','we','you','your',
+        'our','my','me','him','them','us','who','whose','whom','what','which',
+        # common verbs
+        'said','says','say','say','told','tell','tells','telling','get','gets',
+        'got','getting','make','makes','made','making','see','sees','saw','seen',
+        'going','went','go','goes','come','comes','came','take','takes','took',
+        'taken','give','gives','gave','given','keep','kept','let','lets','run',
+        'runs','ran','put','set','try','tried','tries','want','wants','wanted',
+        'need','needs','needed','become','became','feel','felt','seem','seemed',
+        'help','helped','helps','work','works','worked','use','used','uses',
+        'show','showed','shown','shows','find','finds','found','call','calls',
+        'called','turn','turns','turned','start','starts','started','end','ends',
+        'move','moves','moved','bring','brings','brought','leave','left','leaves',
+        'change','changes','changed','include','includes','included','meet',
+        'meets','met','pay','pays','paid','add','adds','added','lose','lost',
+        # adverbs / linking words
+        'more','most','also','just','now','not','no','yes','well','still','even',
+        'however','therefore','thus','hence','moreover','furthermore','meanwhile',
+        'otherwise','instead','rather','quite','almost','already','always',
+        'never','often','sometimes','usually','really','actually','literally',
+        'very','too','so','yet','only','away','back','out','up','down','off',
+        'over','again','then','than','both','either','neither','nor','each',
+        'few','any','some','all','such','own','same','too','every','other',
+        'another','less','least','much','many','around','along','per','via',
+        # time words
+        'today','yesterday','week','month','year','day','time','years','days',
+        'weeks','months','hours','hour','minutes','minute','soon','recently',
+        'monday','tuesday','wednesday','thursday','friday','saturday','sunday',
+        'january','february','march','april','june','july','august','september',
+        'october','november','december',
+        # numbers / quantities
+        'one','two','three','four','five','six','seven','eight','nine','ten',
+        'first','second','third','last','next','million','billion','trillion',
+        'thousand','hundred','percent','cent',
+        # news/media jargon (too generic to be "trending")
+        'news','report','reports','reported','reporting','story','stories',
+        'article','articles','update','updates','latest','breaking','live',
+        'exclusive','opinion','analysis','review','reviews','watch','read',
+        'reading','click','share','tweet','post','comment','subscribe','follow',
+        'appear','appeared','appears','seem','like','likely','new','old',
+        'amid','ahead','after','before','during','under','against','across',
+        'between','within','without','about','around','since','until','while',
+        # generic descriptors
+        'good','bad','great','big','small','large','little','high','low','long',
+        'short','young','early','late','best','worst','better','worse','right',
+        'wrong','clear','major','key','top','full','whole','wide','open','free',
+        'real','true','possible','likely','known','given','local','former',
+        'current','recent','next','previous','main','general','special','public',
+        'private','official','federal','state','national','global','international',
+        # generic people/place nouns
+        'people','person','man','woman','men','women','child','children','world',
+        'country','countries','city','cities','region','area','place','home',
+        'government','official','officials','president','minister','leader',
+        'company','companies','business','businesses','group','groups','team',
+        'teams','party','parties','side','member','members','family','families',
+        # digital/web noise
+        'https','http','www','com','net','org','html','pdf','nbsp','amp','quot',
+        'apos','hellip','mdash','ndash','rsquo','lsquo','rdquo','ldquo',
+        # quantifiers / modal
+        'dont','doesnt','didnt','wont','wouldnt','cant','couldnt','shouldnt',
+        'hasnt','havent','hadnt','isnt','arent','wasnt','werent',
     }
-    
-    # Extract and count multi-word phrases (2-3 words) and single words
-    phrase_counter = Counter()
-    word_counter = Counter()
-    
-    for article in recent_articles:
-        # Combine title and summary for better context
-        text = f"{article['title']} {article['summary']}"
-        text = text.lower()
-        
-        # Remove HTML tags
-        text = re.sub(r'<[^>]+>', '', text)
-        
-        # Remove HTML entities
-        text = re.sub(r'&[a-z]+;', ' ', text)
-        text = re.sub(r'&#\d+;', ' ', text)
-        
-        # Remove special characters but keep hyphens in words
-        text = re.sub(r'[^\w\s-]', ' ', text)
-        
-        # Clean up multiple spaces
+
+    # Phrases that are always in the news and never actually "trending"
+    GENERIC_PHRASES = {
+        'social media','fake news','climate change','breaking news','live blog',
+        'read more','find out','click here','sign up','log in','learn more',
+        'check out','follow us','join us','contact us','terms conditions',
+        'privacy policy','cookie policy','all rights','rights reserved',
+        'artificial intelligence','machine learning','interest rates',
+        'stock market','wall street','white house','united states','united kingdom',
+        'european union','middle east','north korea','south korea',
+    }
+
+    # ── Score by unique-article spread + proper-noun bonus ───────────────────
+    # word -> set of article indices that mention it
+    word_articles: dict = {}
+    phrase_articles: dict = {}
+
+    for idx, article in enumerate(recent_articles):
+        title = article.get('title', '')
+        summary = article.get('summary', '')
+
+        # Collect which words are CAPITALISED in the title (proper noun signal)
+        title_proper = set()
+        for tok in title.split():
+            clean = re.sub(r'[^a-zA-Z]', '', tok)
+            if clean and clean[0].isupper() and clean.lower() not in STOP:
+                title_proper.add(clean.lower())
+
+        text = f"{title} {summary}".lower()
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'&[a-z#\d]+;', ' ', text)
+        text = re.sub(r'[^\w\s]', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
-        
-        # Simple tokenization - split by spaces
-        words = text.split()
-        
-        # Filter words - must be alphabetic, longer than 2 chars, not in stopwords
-        words = [w for w in words if w.isalpha() and len(w) > 2 and w not in stop_words]
-        
-        # Count single words
-        word_counter.update(words)
-        
-        # Extract 2-word and 3-word phrases
+
+        words = [w for w in text.split()
+                 if w.isalpha() and len(w) > 3 and w not in STOP]
+
+        for w in words:
+            word_articles.setdefault(w, set()).add(idx)
+
         for i in range(len(words) - 1):
-            two_word = f"{words[i]} {words[i+1]}"
-            phrase_counter[two_word] += 1
-            
+            bigram = f"{words[i]} {words[i+1]}"
+            if bigram not in GENERIC_PHRASES:
+                phrase_articles.setdefault(bigram, set()).add(idx)
             if i < len(words) - 2:
-                three_word = f"{words[i]} {words[i+1]} {words[i+2]}"
-                phrase_counter[three_word] += 1
-    
-    # Combine and rank topics
-    # Phrases are weighted higher (2x) since they're more specific
-    all_topics = []
-    
-    # Generic phrase patterns to exclude
-    generic_phrase_patterns = [
-        'read more', 'find out', 'click here', 'sign up', 'log in',
-        'learn more', 'check out', 'follow us', 'join us', 'contact us',
-        'terms conditions', 'privacy policy', 'cookie policy',
-        'copyright all', 'rights reserved', 'all rights'
-    ]
-    
-    # Add top phrases with higher weight
-    for phrase, count in phrase_counter.most_common(50):
-        # Must appear at least 3 times for better quality
-        if count >= 3:
-            phrase_lower = phrase.lower()
-            
-            # Skip generic phrases
-            if any(pattern in phrase_lower for pattern in generic_phrase_patterns):
-                continue
-                
-            # Skip phrases that are all numbers or very short words
-            phrase_words = phrase.split()
-            if all(len(w) <= 2 for w in phrase_words):
-                continue
-            
-            all_topics.append({
-                'topic': phrase.title(),
-                'count': count * 2,  # Weight phrases higher
-                'type': 'phrase'
-            })
-    
-    # Add top single words
-    for word, count in word_counter.most_common(50):
-        # Must appear at least 4 times and be at least 4 characters for better quality
-        if count >= 4 and len(word) >= 4:
-            # Don't add if it's part of a common phrase
-            word_lower = word.lower()
-            is_in_phrase = any(word_lower in phrase['topic'].lower() 
-                              for phrase in all_topics[:10])
-            if not is_in_phrase:
-                all_topics.append({
-                    'topic': word.title(),
-                    'count': count,
-                    'type': 'word'
-                })
-    
-    # Sort by count and get top N
-    all_topics.sort(key=lambda x: x['count'], reverse=True)
-    
-    # Return top N unique topics
+                trigram = f"{words[i]} {words[i+1]} {words[i+2]}"
+                if trigram not in GENERIC_PHRASES:
+                    phrase_articles.setdefault(trigram, set()).add(idx)
+
+    # ── Build candidate list ─────────────────────────────────────────────────
+    candidates = []
+
+    # Proper-noun single words: appeared capitalised in ≥2 article titles
+    # Collect proper nouns across all titles
+    proper_noun_counts: dict = {}
+    for article in recent_articles:
+        for tok in article.get('title', '').split():
+            clean = re.sub(r'[^a-zA-Z]', '', tok)
+            if len(clean) > 3 and clean[0].isupper() and clean.lower() not in STOP:
+                proper_noun_counts[clean.lower()] = proper_noun_counts.get(clean.lower(), 0) + 1
+
+    for word, art_set in word_articles.items():
+        spread = len(art_set)
+        if spread < 3:
+            continue
+        is_proper = proper_noun_counts.get(word, 0) >= 2
+        score = spread * (2.5 if is_proper else 1.0)
+        candidates.append({'topic': word, 'score': score, 'spread': spread,
+                           'is_phrase': False, 'is_proper': is_proper})
+
+    for phrase, art_set in phrase_articles.items():
+        spread = len(art_set)
+        if spread < 2:
+            continue
+        # Phrase is "proper" if at least one word is a known proper noun
+        phrase_words = phrase.split()
+        is_proper = any(proper_noun_counts.get(w, 0) >= 2 for w in phrase_words)
+        # Prefer longer, more specific phrases
+        length_bonus = 1.4 if len(phrase_words) == 3 else 1.2
+        score = spread * length_bonus * (2.5 if is_proper else 1.0)
+        candidates.append({'topic': phrase, 'score': score, 'spread': spread,
+                           'is_phrase': True, 'is_proper': is_proper})
+
+    # Sort by score descending
+    candidates.sort(key=lambda x: x['score'], reverse=True)
+
+    # ── De-duplicate: skip if substring of already accepted topic ────────────
     trending = []
-    seen = set()
-    for topic_data in all_topics:
-        topic = topic_data['topic']
-        topic_lower = topic.lower()
-        
-        # Check for duplicates or substrings
-        is_duplicate = False
-        for seen_topic in seen:
-            if topic_lower in seen_topic or seen_topic in topic_lower:
-                is_duplicate = True
-                break
-        
-        if not is_duplicate:
-            trending.append({
-                'topic': topic,
-                'count': topic_data['count'] // 2 if topic_data['type'] == 'phrase' else topic_data['count'],
-                'articles': []  # Will be populated with relevant articles
-            })
-            seen.add(topic_lower)
-        
+    seen_words: set = set()
+
+    for c in candidates:
+        t_lower = c['topic'].lower()
+        t_words = set(t_lower.split())
+
+        # Skip if all words already covered by an accepted topic
+        if t_words.issubset(seen_words):
+            continue
+        # Skip if this topic is a substring of an already accepted one
+        if any(t_lower in accepted for accepted in seen_words):
+            continue
+        # Skip generic all-lowercase single words unless they're proper nouns
+        if not c['is_phrase'] and not c['is_proper'] and c['spread'] < 6:
+            continue
+
+        display = ' '.join(w.capitalize() for w in c['topic'].split())
+        seen_words.update(t_words)
+
+        trending.append({
+            'topic': display,
+            'count': c['spread'],
+            'articles': []
+        })
+
         if len(trending) >= top_n:
             break
-    
-    # Find articles for each trending topic
-    for topic_data in trending:
-        topic_lower = topic_data['topic'].lower()
-        topic_articles = []
-        
+
+    # ── Attach related articles ───────────────────────────────────────────────
+    for td in trending:
+        t_lower = td['topic'].lower()
+        found = []
         for article in recent_articles:
-            text = f"{article['title']} {article['summary']}".lower()
-            if topic_lower in text:
-                topic_articles.append({
+            haystack = f"{article['title']} {article['summary']}".lower()
+            if t_lower in haystack or all(w in haystack for w in t_lower.split()):
+                found.append({
                     'title': article['title'],
                     'link': article['link'],
                     'site': article['site'],
                     'category': article['category']
                 })
-                
-                if len(topic_articles) >= 3:  # Max 3 articles per topic
+                if len(found) >= 3:
                     break
-        
-        topic_data['articles'] = topic_articles
-    
+        td['articles'] = found
+
     return trending
 
 def create_email_content(articles):
