@@ -1043,6 +1043,8 @@ if __name__ == "__main__":
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
 
-    # Start Flask web server
-    logging.info("Starting web server at http://localhost:5000")
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    # Start Flask web server (use PORT env var for Railway, fallback to 5000 locally)
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('RAILWAY_ENVIRONMENT') is None  # disable debug in production
+    logging.info(f"Starting web server on port {port}")
+    app.run(debug=debug, host='0.0.0.0', port=port, use_reloader=False)
