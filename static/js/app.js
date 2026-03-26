@@ -445,13 +445,7 @@ function createArticleCard(article, index) {
         : cleanSummary;
     
     const isBookmarked = bookmarkedUrls.has(article.link);
-    const imgHtml = article.image_url
-        ? `<a href="${escapeHtml(article.link)}" target="_blank" rel="noopener noreferrer" class="article-card-img-link">
-               <img class="article-card-img" src="${escapeHtml(article.image_url)}" alt="" loading="lazy" onerror="this.closest('.article-card-img-link').style.display='none'">
-           </a>`
-        : '';
     card.innerHTML = `
-        ${imgHtml}
         <div class="article-header">
             <span class="category-badge ${categoryClass}">${escapeHtml(article.category)}</span>
             <div class="article-actions">
