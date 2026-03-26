@@ -147,7 +147,7 @@ function renderTrendingTopics(topics) {
         <div class="trending-item" style="animation-delay: ${index * 0.05}s">
             <div class="trending-item-header">
                 <div class="trending-item-name">${escapeHtml(topic.topic)}</div>
-                <span class="trending-item-count">#${topic.count}</span>
+                <span class="trending-item-count">${topic.count}x</span>
             </div>
             ${topic.articles && topic.articles.length > 0 ? `
                 <div class="trending-item-articles">
