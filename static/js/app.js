@@ -83,31 +83,26 @@ async function fetchArticles(forceRefresh = false) {
 async function initTicker() {
     const track = document.getElementById('tickerTrack');
     if (!track) return;
-    try {
-        const resp = await fetch('/api/articles');
-        if (!resp.ok) return;
-        const data = await resp.json();
-        const articles = (data.articles || []).slice(0, 20);
-        if (!articles.length) return;
+    // Re-use already-loaded articles rather than a second fetch
+    const articles = (allArticles || []).slice(0, 20);
+    if (!articles.length) return;
 
-        // Build double-set for seamless loop
-        const makeItems = () => articles.map(a => {
-            const item = document.createElement('span');
-            item.className = 'ticker-item';
-            item.textContent = a.title;
-            item.addEventListener('click', () => window.open(a.url, '_blank', 'noopener'));
-            const sep = document.createElement('span');
-            sep.className = 'ticker-sep';
-            sep.textContent = ' ◆ ';
-            const wrap = document.createDocumentFragment();
-            wrap.appendChild(item);
-            wrap.appendChild(sep);
-            return wrap;
-        });
+    const makeItems = () => articles.map(a => {
+        const frag = document.createDocumentFragment();
+        const item = document.createElement('span');
+        item.className = 'ticker-item';
+        item.textContent = a.title;
+        item.addEventListener('click', () => window.open(a.link, '_blank', 'noopener'));
+        const sep = document.createElement('span');
+        sep.className = 'ticker-sep';
+        sep.textContent = ' ◆ ';
+        frag.appendChild(item);
+        frag.appendChild(sep);
+        return frag;
+    });
 
-        makeItems().forEach(f => track.appendChild(f));
-        makeItems().forEach(f => track.appendChild(f)); // duplicate for loop
-    } catch (e) { /* ticker is non-critical */ }
+    makeItems().forEach(f => track.appendChild(f));
+    makeItems().forEach(f => track.appendChild(f)); // duplicate for seamless loop
 }
 
 async function fetchTrendingTopics() {
@@ -450,7 +445,13 @@ function createArticleCard(article, index) {
         : cleanSummary;
     
     const isBookmarked = bookmarkedUrls.has(article.link);
+    const imgHtml = article.image_url
+        ? `<a href="${escapeHtml(article.link)}" target="_blank" rel="noopener noreferrer" class="article-card-img-link">
+               <img class="article-card-img" src="${escapeHtml(article.image_url)}" alt="" loading="lazy" onerror="this.closest('.article-card-img-link').style.display='none'">
+           </a>`
+        : '';
     card.innerHTML = `
+        ${imgHtml}
         <div class="article-header">
             <span class="category-badge ${categoryClass}">${escapeHtml(article.category)}</span>
             <div class="article-actions">

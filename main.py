@@ -328,6 +328,25 @@ def fetch_articles(force_refresh=False):
                     
                     domain = url.split('/')[2] if len(url.split('/')) > 2 else url
                     
+                    # Extract image from media_thumbnail, media_content, or enclosure
+                    image_url = ''
+                    if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
+                        image_url = entry.media_thumbnail[0].get('url', '')
+                    elif hasattr(entry, 'media_content') and entry.media_content:
+                        image_url = entry.media_content[0].get('url', '')
+                    elif hasattr(entry, 'enclosures') and entry.enclosures:
+                        for enc in entry.enclosures:
+                            if enc.get('type', '').startswith('image/'):
+                                image_url = enc.get('href', enc.get('url', ''))
+                                break
+                    # Fallback: pull first <img> from summary HTML
+                    if not image_url:
+                        summary_html = getattr(entry, 'summary', '')
+                        import re as _re
+                        m = _re.search(r'<img[^>]+src=["\']([^"\']+)["\']', summary_html)
+                        if m:
+                            image_url = m.group(1)
+
                     articles.append({
                         'title': entry.title,
                         'author': getattr(entry, 'author', 'N/A'),
@@ -337,7 +356,8 @@ def fetch_articles(force_refresh=False):
                         'site': domain,
                         'feed_url': url,
                         'published': pub_date.isoformat(),
-                        'published_display': pub_date.strftime('%b %d, %Y %I:%M %p')
+                        'published_display': pub_date.strftime('%b %d, %Y %I:%M %p'),
+                        'image_url': image_url,
                     })
                 except AttributeError as e:
                     logging.warning(f"Missing attribute in entry from {url}: {e}. Skipping entry.")
@@ -1054,6 +1074,19 @@ def _startup():
             logging.info(f"Loaded {len(added_rows)} user-added feeds into rss_feeds")
         except Exception as e:
             logging.warning(f"Could not load user-added feeds on startup: {e}")
+
+    # Warm the article cache in the background so the first user request is fast
+    def _warm_cache():
+        with app.app_context():
+            try:
+                logging.info("Warming article cache in background...")
+                fetch_articles(force_refresh=True)
+                logging.info("Article cache warmed successfully")
+            except Exception as e:
+                logging.warning(f"Cache warm failed (non-fatal): {e}")
+
+    warm_thread = threading.Thread(target=_warm_cache, daemon=True)
+    warm_thread.start()
 
 _startup()
 
