@@ -24,7 +24,12 @@ logging.basicConfig(level=logging.INFO)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-change-in-prod')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URL', 'sqlite:///optionews.db')
+
+# Fix Railway's postgres:// prefix — SQLAlchemy 2.x requires postgresql://
+_db_url = os.getenv('DATABASE_URL', 'sqlite:///optionews.db')
+if _db_url.startswith('postgres://'):
+    _db_url = _db_url.replace('postgres://', 'postgresql://', 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {'pool_pre_ping': True, 'pool_recycle': 300}
 
@@ -1026,10 +1031,11 @@ def run_scheduler():
 # Schedule email for 9am daily
 schedule.every().day.at("09:00").do(job)
 
-if __name__ == "__main__":
+# ==================== App Startup (runs on import + __main__) ====================
+def _startup():
+    """Initialize DB tables and re-hydrate user-added feeds. Safe to call multiple times."""
     with app.app_context():
         db.create_all()
-        # Re-hydrate global rss_feeds with any feeds users have added in previous sessions
         try:
             added_rows = UserFeed.query.filter_by(is_added=True).all()
             for row in added_rows:
@@ -1039,6 +1045,9 @@ if __name__ == "__main__":
         except Exception as e:
             logging.warning(f"Could not load user-added feeds on startup: {e}")
 
+_startup()
+
+if __name__ == "__main__":
     # Start scheduler in background thread
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
