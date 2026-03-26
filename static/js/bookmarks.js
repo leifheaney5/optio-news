@@ -5,6 +5,7 @@ let editingId = null;
 
 // ==================== DOM ====================
 const bmGrid = document.getElementById('bmGrid');
+const bmLoading = document.getElementById('bmLoading');
 const bmSearch = document.getElementById('bmSearch');
 const tagFilters = document.getElementById('tagFilters');
 const addBookmarkBtn = document.getElementById('addBookmarkBtn');
@@ -47,13 +48,18 @@ function escapeHtml(text) {
 
 // ==================== API ====================
 async function loadBookmarks() {
+    if (bmLoading) bmLoading.style.display = 'block';
+    bmGrid.style.display = 'none';
     try {
         const res = await fetch('/api/bookmarks');
         if (!res.ok) throw new Error('Failed to load');
         const data = await res.json();
         bookmarks = data.bookmarks || [];
+        if (bmLoading) bmLoading.style.display = 'none';
+        bmGrid.style.display = 'grid';
         renderAll();
     } catch (e) {
+        if (bmLoading) bmLoading.style.display = 'none';
         showToast('Could not load bookmarks', 'error');
     }
 }
@@ -267,6 +273,10 @@ function exportMarkdown() {
 addBookmarkBtn.addEventListener('click', openAddModal);
 cancelBtn.addEventListener('click', closeModal);
 exportBtn.addEventListener('click', exportMarkdown);
+
+// Close button inside modal header
+const bmModalClose = document.getElementById('bmModalClose');
+if (bmModalClose) bmModalClose.addEventListener('click', closeModal);
 
 modal.addEventListener('click', e => {
     if (e.target === modal) closeModal();

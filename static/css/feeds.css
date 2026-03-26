@@ -354,3 +354,101 @@
         bottom: 1rem;
     }
 }
+
+/* ==================== Account Section ==================== */
+.account-section {
+    margin-top: 3rem;
+    padding-top: 2rem;
+    border-top: 2px solid var(--border-color);
+}
+
+.account-section-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: var(--text-secondary);
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.account-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-width: 600px;
+}
+
+.account-btn {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 1rem 1.25rem;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    cursor: pointer;
+    text-decoration: none;
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 0.95rem;
+    transition: all 0.2s ease;
+    text-align: left;
+    width: 100%;
+}
+
+.account-btn > i:first-child {
+    font-size: 1.2rem;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.account-btn div {
+    flex: 1;
+}
+
+.account-btn div strong {
+    display: block;
+    font-weight: 600;
+}
+
+.account-btn div span {
+    display: block;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+.account-btn-arrow {
+    color: var(--text-tertiary);
+    font-size: 0.85rem;
+}
+
+.account-btn-export:hover {
+    border-color: var(--accent-primary);
+    background: var(--bg-tertiary);
+}
+
+.account-btn-export:hover > i:first-child {
+    background: var(--accent-primary);
+    color: white;
+}
+
+.account-btn-danger:hover {
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.05);
+}
+
+.account-btn-danger:hover > i:first-child {
+    background: #ef4444;
+    color: white;
+}
+

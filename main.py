@@ -1014,6 +1014,15 @@ def delete_bookmark(bookmark_id):
     db.session.commit()
     return jsonify({'success': True})
 
+@app.route('/api/account', methods=['DELETE'])
+@login_required
+def delete_account():
+    user = db.session.get(User, current_user.id)
+    logout_user()
+    db.session.delete(user)
+    db.session.commit()
+    return jsonify({'success': True})
+
 # ==================== Scheduled Job ====================
 
 def job():

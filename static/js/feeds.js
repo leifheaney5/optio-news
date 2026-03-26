@@ -402,6 +402,25 @@ async function init() {
     
     // Setup event listeners
     initEventListeners();
+
+    // Delete account button
+    const deleteAccountBtn = document.getElementById('deleteAccountBtn');
+    if (deleteAccountBtn) {
+        deleteAccountBtn.addEventListener('click', async () => {
+            if (!confirm('Are you sure you want to permanently delete your account? This cannot be undone.')) return;
+            if (!confirm('Last chance — all your bookmarks and feed settings will be erased. Continue?')) return;
+            try {
+                const res = await fetch('/api/account', { method: 'DELETE' });
+                if (res.ok) {
+                    window.location.href = '/login';
+                } else {
+                    showToast('Failed to delete account', 'error');
+                }
+            } catch {
+                showToast('Failed to delete account', 'error');
+            }
+        });
+    }
     
     // Load feeds
     await Promise.all([
