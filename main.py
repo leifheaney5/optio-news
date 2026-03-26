@@ -438,6 +438,7 @@ def extract_trending_topics(articles, top_n=10):
         'appear','appeared','appears','seem','like','likely','new','old',
         'amid','ahead','after','before','during','under','against','across',
         'between','within','without','about','around','since','until','while',
+        'into','onto','upon','according','including','following','regarding',
         # generic descriptors
         'good','bad','great','big','small','large','little','high','low','long',
         'short','young','early','late','best','worst','better','worse','right',
@@ -445,12 +446,29 @@ def extract_trending_topics(articles, top_n=10):
         'real','true','possible','likely','known','given','local','former',
         'current','recent','next','previous','main','general','special','public',
         'private','official','federal','state','national','global','international',
+        'significant','important','growing','increasing','rising','falling',
+        'leading','leading','according','multiple','several','various','different',
+        # generic standalone nouns (too broad to be meaningful trends)
+        'market','markets','court','courts','series','deal','deals','data',
+        'case','cases','bill','bills','plan','plans','move','moves','role',
+        'claim','claims','rule','rules','risk','risks','rate','rates','cost',
+        'costs','poll','polls','vote','votes','issue','issues','price','prices',
+        'sale','sales','loss','losses','gain','gains','growth','fund','funds',
+        'call','calls','talk','talks','walk','race','race','shot','shots',
+        'line','lines','lead','leads','hold','holds','draw','draws','game',
+        'games','test','tests','term','terms','step','steps','fact','facts',
+        'half','quarter','round','point','points','level','levels','stage',
+        'source','sources','impact','effect','effects','effort','efforts',
+        'support','response','result','results','number','numbers','amount',
+        'total','figure','figures','record','records','demand','supply',
         # generic people/place nouns
         'people','person','man','woman','men','women','child','children','world',
         'country','countries','city','cities','region','area','place','home',
         'government','official','officials','president','minister','leader',
         'company','companies','business','businesses','group','groups','team',
         'teams','party','parties','side','member','members','family','families',
+        'investor','investors','consumer','consumers','worker','workers',
+        'player','players','student','students','citizen','citizens',
         # digital/web noise
         'https','http','www','com','net','org','html','pdf','nbsp','amp','quot',
         'apos','hellip','mdash','ndash','rsquo','lsquo','rdquo','ldquo',
@@ -558,8 +576,8 @@ def extract_trending_topics(articles, top_n=10):
         # Skip if this topic is a substring of an already accepted one
         if any(t_lower in accepted for accepted in seen_words):
             continue
-        # Skip generic all-lowercase single words unless they're proper nouns
-        if not c['is_phrase'] and not c['is_proper'] and c['spread'] < 6:
+        # Non-proper single words need very high spread to qualify
+        if not c['is_phrase'] and not c['is_proper'] and c['spread'] < 10:
             continue
 
         display = ' '.join(w.capitalize() for w in c['topic'].split())
