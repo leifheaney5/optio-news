@@ -230,6 +230,67 @@
     .bm-actions-float { opacity: 1; }
 }
 
+/* ==================== List View (bookmarks) ==================== */
+.bm-grid.bm-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+.bm-list .bm-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 0.6rem 1rem;
+    overflow: visible;
+}
+.bm-list .bm-card--noimg::before { width: 4px; height: auto; inset: 0 auto 0 0; border-radius: 4px 0 0 4px; }
+.bm-list .bm-image {
+    width: 92px;
+    height: 60px;
+    aspect-ratio: auto;
+    border-radius: 8px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+.bm-list .bm-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 0;
+    min-width: 0;
+}
+.bm-list .bm-title {
+    flex: 1;
+    min-width: 0;
+    padding-right: 0;
+    font-size: 0.95rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.bm-list .bm-desc { display: none; }
+.bm-list .bm-tags { flex-shrink: 0; }
+.bm-list .bm-meta {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+    flex-shrink: 0;
+    gap: 14px;
+}
+.bm-list .bm-actions-float {
+    position: static;
+    opacity: 1;
+    flex-shrink: 0;
+}
+.bm-list .bm-action-btn {
+    background: var(--glass-chip);
+    color: var(--text-secondary);
+}
+
+@media (max-width: 640px) {
+    .bm-list .bm-tags, .bm-list .bm-date { display: none; }
+}
+
 /* Empty State */
 .bm-empty { text-align: center; padding: 5rem 2rem; grid-column: 1/-1; }
 .bm-empty i {

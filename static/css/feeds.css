@@ -452,3 +452,53 @@
     color: white;
 }
 
+
+/* ==================== List View (feeds) ==================== */
+.feeds-grid.feeds-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+.feeds-list .feed-card {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    padding: 0.7rem 1.1rem;
+}
+.feeds-list .feed-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
+}
+.feeds-list .feed-info { min-width: 0; flex: 1; }
+.feeds-list .feed-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.feeds-list .feed-url {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 420px;
+}
+.feeds-list .feed-status {
+    margin: 0;
+    padding: 4px 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.feeds-list .feed-actions {
+    margin-top: 0;
+    flex-shrink: 0;
+}
+.feeds-list .btn-feed { padding: 8px 14px; white-space: nowrap; }
+
+@media (max-width: 640px) {
+    .feeds-list .feed-card { flex-wrap: wrap; }
+    .feeds-list .feed-url { max-width: 100%; }
+}

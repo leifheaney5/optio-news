@@ -319,8 +319,33 @@ function showToast(message, type = 'success') {
     }, 3000);
 }
 
+// ==================== View Mode (grid | list) ====================
+let feedsViewMode = localStorage.getItem('feedsViewMode') || 'grid';
+
+function applyFeedsViewMode() {
+    const grids = [elements.activeFeedsGrid, elements.availableFeedsGrid];
+    grids.forEach(grid => {
+        if (grid) grid.classList.toggle('feeds-list', feedsViewMode === 'list');
+    });
+    const toggle = document.getElementById('viewToggle');
+    if (toggle) {
+        toggle.querySelector('i').className = feedsViewMode === 'list' ? 'fas fa-th-large' : 'fas fa-list';
+        toggle.title = feedsViewMode === 'list' ? 'Switch to grid view' : 'Switch to list view';
+    }
+}
+
+function toggleFeedsViewMode() {
+    feedsViewMode = feedsViewMode === 'grid' ? 'list' : 'grid';
+    localStorage.setItem('feedsViewMode', feedsViewMode);
+    applyFeedsViewMode();
+}
+
 // ==================== Event Listeners ====================
 function initEventListeners() {
+    // Grid / list view toggle
+    const viewToggle = document.getElementById('viewToggle');
+    if (viewToggle) viewToggle.addEventListener('click', toggleFeedsViewMode);
+
     // Tab switching
     elements.tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
@@ -374,6 +399,9 @@ function initEventListeners() {
 async function init() {
     // Setup event listeners
     initEventListeners();
+
+    // Apply saved view mode
+    applyFeedsViewMode();
 
     // Delete account button
     const deleteAccountBtn = document.getElementById('deleteAccountBtn');

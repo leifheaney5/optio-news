@@ -56,7 +56,7 @@ async function loadBookmarks() {
         const data = await res.json();
         bookmarks = data.bookmarks || [];
         if (bmLoading) bmLoading.style.display = 'none';
-        bmGrid.style.display = 'grid';
+        bmGrid.style.display = ''; // stylesheet decides: grid, or flex column in list view
         renderAll();
     } catch (e) {
         if (bmLoading) bmLoading.style.display = 'none';
@@ -308,5 +308,27 @@ tagFilters.addEventListener('click', e => {
     renderAll();
 });
 
+// ==================== View Mode (grid | list) ====================
+let bmViewMode = localStorage.getItem('bmViewMode') || 'grid';
+
+function applyBmViewMode() {
+    bmGrid.classList.toggle('bm-list', bmViewMode === 'list');
+    const toggle = document.getElementById('viewToggle');
+    if (toggle) {
+        toggle.querySelector('i').className = bmViewMode === 'list' ? 'fas fa-th-large' : 'fas fa-list';
+        toggle.title = bmViewMode === 'list' ? 'Switch to grid view' : 'Switch to list view';
+    }
+}
+
+const viewToggleBtn = document.getElementById('viewToggle');
+if (viewToggleBtn) {
+    viewToggleBtn.addEventListener('click', () => {
+        bmViewMode = bmViewMode === 'grid' ? 'list' : 'grid';
+        localStorage.setItem('bmViewMode', bmViewMode);
+        applyBmViewMode();
+    });
+}
+
 // ==================== Init ====================
+applyBmViewMode();
 loadBookmarks();
