@@ -3,28 +3,48 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Create Account - Optio News</title>
+    <title>Create Account — Optio.News</title>
+    <meta name="description" content="Create your Optio.News account and get the most important stories, topics, and perspectives in one place.">
+    <script>
+        document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+    </script>
+    <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="%234EA1FF"/><stop offset=".55" stop-color="%237C5CFF"/><stop offset="1" stop-color="%23A855F7"/></linearGradient></defs><rect x="2" y="24" width="17" height="5" rx="2.5" fill="url(%23g)"/><rect x="7" y="33" width="12" height="5" rx="2.5" fill="url(%23g)"/><rect x="12" y="15" width="9" height="5" rx="2.5" fill="url(%23g)"/><circle cx="38" cy="32" r="20" stroke="url(%23g)" stroke-width="11" fill="none"/></svg>'>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
     <div class="auth-page">
+        <div class="auth-scene" aria-hidden="true">
+            <div class="aurora aurora-a"></div>
+            <div class="aurora aurora-b"></div>
+            <div class="aurora aurora-c"></div>
+            <div class="shard shard-1"></div>
+            <div class="shard shard-2"></div>
+            <div class="shard shard-3"></div>
+            <div class="shard shard-4"></div>
+            {% for category in categories[:6] %}
+            <span class="float-chip">{{ category }}</span>
+            {% endfor %}
+        </div>
+
         <div class="auth-card">
             <div class="auth-logo">
-                <i class="fas fa-newspaper logo-icon"></i>
-                <h1>Optio News</h1>
-                <p>Stay informed, stay ahead.</p>
+                {% include '_logo.html' %}
+                <p class="auth-tagline">
+                    <strong>Stay informed. See what matters.</strong>
+                    Follow the sources and topics you care about — all in one place.
+                </p>
             </div>
 
             <h2 class="auth-title">Create your account</h2>
 
             {% with messages = get_flashed_messages(with_categories=true) %}
               {% for category, message in messages %}
-                <div class="auth-alert auth-alert--{{ category }}">
-                    <i class="fas fa-exclamation-circle"></i> {{ message }}
+                <div class="auth-alert auth-alert--{{ category }}" role="alert">
+                    <i class="fas fa-exclamation-circle" aria-hidden="true"></i> {{ message }}
                 </div>
               {% endfor %}
             {% endwith %}
@@ -33,27 +53,33 @@
                 <div class="auth-field">
                     <label for="email">Email address</label>
                     <div class="auth-input-wrap">
-                        <i class="fas fa-envelope"></i>
-                        <input type="email" id="email" name="email" placeholder="you@example.com" required autofocus>
+                        <i class="fas fa-envelope" aria-hidden="true"></i>
+                        <input type="email" id="email" name="email" placeholder="you@example.com"
+                               autocomplete="email" required autofocus>
                     </div>
                 </div>
                 <div class="auth-field">
                     <label for="password">Password</label>
                     <div class="auth-input-wrap">
-                        <i class="fas fa-lock"></i>
-                        <input type="password" id="password" name="password" placeholder="Min. 8 characters" required>
+                        <i class="fas fa-lock" aria-hidden="true"></i>
+                        <input type="password" id="password" name="password" placeholder="Min. 8 characters"
+                               autocomplete="new-password" minlength="8" required>
+                        <button type="button" class="pw-toggle" id="pwToggle" aria-label="Show password" aria-pressed="false">
+                            <i class="far fa-eye" aria-hidden="true"></i>
+                        </button>
                     </div>
                 </div>
                 <div class="auth-field">
                     <label for="confirm_password">Confirm password</label>
                     <div class="auth-input-wrap">
-                        <i class="fas fa-lock"></i>
-                        <input type="password" id="confirm_password" name="confirm_password" placeholder="Repeat your password" required>
+                        <i class="fas fa-lock" aria-hidden="true"></i>
+                        <input type="password" id="confirm_password" name="confirm_password" placeholder="Repeat your password"
+                               autocomplete="new-password" minlength="8" required>
                     </div>
                 </div>
                 <button type="submit" class="auth-btn">
                     Create Account
-                    <i class="fas fa-arrow-right"></i>
+                    <i class="fas fa-arrow-right" aria-hidden="true"></i>
                 </button>
             </form>
 
@@ -65,8 +91,21 @@
     </div>
 
     <script>
-        const theme = localStorage.getItem('theme') || 'light';
-        document.documentElement.setAttribute('data-theme', theme);
+        const pwToggle = document.getElementById('pwToggle');
+        const pwInput = document.getElementById('password');
+        pwToggle.addEventListener('click', () => {
+            const show = pwInput.type === 'password';
+            pwInput.type = show ? 'text' : 'password';
+            pwToggle.setAttribute('aria-pressed', String(show));
+            pwToggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+            pwToggle.querySelector('i').className = show ? 'far fa-eye-slash' : 'far fa-eye';
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            document.querySelectorAll('.aurora, .shard, .float-chip').forEach(el => {
+                el.style.animationPlayState = document.hidden ? 'paused' : 'running';
+            });
+        });
     </script>
 </body>
 </html>

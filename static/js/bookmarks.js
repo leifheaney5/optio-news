@@ -310,7 +310,7 @@ tagFilters.addEventListener('click', e => {
 
 // ==================== Init ====================
 // Apply saved theme
-const saved = localStorage.getItem('theme') || 'light';
+const saved = localStorage.getItem('theme') || 'dark';
 document.documentElement.setAttribute('data-theme', saved);
 
 loadBookmarks();

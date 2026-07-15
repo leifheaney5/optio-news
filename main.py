@@ -702,7 +702,7 @@ def login():
             next_page = request.args.get('next')
             return redirect(next_page or url_for('index'))
         flash('Invalid email or password.', 'error')
-    return render_template('login.html')
+    return render_template('login.html', categories=list(rss_feeds.keys()))
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
@@ -729,7 +729,7 @@ def register():
             db.session.commit()
             login_user(user)
             return redirect(url_for('index'))
-    return render_template('register.html')
+    return render_template('register.html', categories=list(rss_feeds.keys()))
 
 @app.route('/logout')
 @login_required

@@ -441,7 +441,10 @@ class TestAccount:
 
 class TestTrendingAlgorithm:
     def _make_articles(self, titles):
-        return [{'title': t, 'summary': '', 'published': '2026-03-26T12:00:00',
+        # Use a live timestamp — extract_trending_topics only looks at the last 24h
+        from datetime import datetime
+        now_iso = datetime.now().isoformat()
+        return [{'title': t, 'summary': '', 'published': now_iso,
                  'category': 'General News', 'link': 'https://example.com',
                  'site': 'example.com'} for t in titles]
 
@@ -492,9 +495,10 @@ class TestTrendingAlgorithm:
     def test_non_proper_single_words_need_high_spread(self):
         """Single non-proper-noun words need spread ≥ 10 to survive."""
         # 9 different articles with a common word — should be blocked
+        from datetime import datetime
         arts = [{'title': f'Article {i} talks about things today',
                  'summary': 'things are happening',
-                 'published': '2026-03-26T12:00:00',
+                 'published': datetime.now().isoformat(),
                  'category': 'General News', 'link': 'https://example.com',
                  'site': 'example.com'} for i in range(9)]
         result = extract_trending_topics(arts)

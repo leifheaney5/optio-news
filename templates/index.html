@@ -3,43 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Optio News - Your Daily News Digest</title>
+    <title>Optio.News — Stay informed. See what matters.</title>
+    <meta name="description" content="Optio.News brings the most important stories, topics, and perspectives into one intelligent reading experience.">
+    <script>
+        // Apply theme before first paint to avoid a flash (dark is the brand default)
+        document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+    </script>
+    <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="%234EA1FF"/><stop offset=".55" stop-color="%237C5CFF"/><stop offset="1" stop-color="%23A855F7"/></linearGradient></defs><rect x="2" y="24" width="17" height="5" rx="2.5" fill="url(%23g)"/><rect x="7" y="33" width="12" height="5" rx="2.5" fill="url(%23g)"/><rect x="12" y="15" width="9" height="5" rx="2.5" fill="url(%23g)"/><circle cx="38" cy="32" r="20" stroke="url(%23g)" stroke-width="11" fill="none"/></svg>'>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
+    <a class="skip-link" href="#articlesGrid">Skip to stories</a>
+    <div class="ambient" aria-hidden="true"></div>
+
     <!-- Header -->
-    <header class="header">
+    <header class="header" id="siteHeader">
         <div class="container">
             <div class="header-content">
                 <div class="logo-section">
-                    <i class="fas fa-newspaper logo-icon"></i>
-                    <div>
-                        <h1 class="logo">Optio News</h1>
-                        <p class="tagline">Stay informed, stay ahead.</p>
-                    </div>
+                    {% include '_logo.html' %}
+                    <p class="tagline">Stay informed. See what matters.</p>
                 </div>
                 <div class="header-controls">
-                    <a href="/bookmarks" class="manage-feeds-btn" title="Bookmarks">
-                        <i class="fas fa-bookmark"></i>
+                    <a href="/bookmarks" class="manage-feeds-btn" title="Bookmarks" aria-label="Bookmarks">
+                        <i class="fas fa-bookmark" aria-hidden="true"></i>
                     </a>
-                    <a href="/feeds" class="manage-feeds-btn" title="Manage feeds">
-                        <i class="fas fa-cog"></i>
+                    <a href="/feeds" class="manage-feeds-btn" title="Manage feeds" aria-label="Manage feeds">
+                        <i class="fas fa-cog" aria-hidden="true"></i>
                     </a>
-                    <button class="view-toggle" id="viewToggle" title="Toggle list/grid view">
-                        <i class="fas fa-list"></i>
+                    <button class="view-toggle" id="viewToggle" title="Toggle list/grid view" aria-label="Toggle list or grid view">
+                        <i class="fas fa-list" aria-hidden="true"></i>
                     </button>
-                    <button class="theme-toggle" id="themeToggle" title="Toggle theme">
-                        <i class="fas fa-moon"></i>
+                    <button class="theme-toggle" id="themeToggle" title="Toggle theme" aria-label="Toggle color theme">
+                        <i class="fas fa-moon" aria-hidden="true"></i>
                     </button>
-                    <button class="refresh-btn" id="refreshBtn" title="Refresh articles">
-                        <i class="fas fa-sync-alt"></i>
+                    <button class="refresh-btn" id="refreshBtn" title="Refresh articles" aria-label="Refresh articles">
+                        <i class="fas fa-sync-alt" aria-hidden="true"></i>
                     </button>
                     <a href="/logout" class="user-menu" title="Sign out ({{ user.email }})">
-                        <i class="fas fa-user-circle"></i>
+                        <i class="fas fa-user-circle" aria-hidden="true"></i>
                         <span class="user-email">{{ user.email }}</span>
                     </a>
                 </div>
@@ -47,9 +53,9 @@
         </div>
     </header>
 
-    <!-- Breaking News Ticker -->
+    <!-- Latest headlines ticker -->
     <div class="ticker-bar">
-        <span class="ticker-label"><i class="fas fa-bolt"></i> Breaking</span>
+        <span class="ticker-label"><i class="fas fa-bolt" aria-hidden="true"></i> Latest</span>
         <div class="ticker-track-wrap">
             <div class="ticker-track" id="tickerTrack">
                 <!-- filled by JS -->
@@ -65,43 +71,45 @@
             <!-- Search and Filter Bar -->
             <div class="control-bar">
                 <div class="search-box">
-                    <i class="fas fa-search search-icon"></i>
-                    <input 
-                        type="text" 
-                        id="searchInput" 
-                        placeholder="Search articles..." 
+                    <i class="fas fa-search search-icon" aria-hidden="true"></i>
+                    <input
+                        type="text"
+                        id="searchInput"
+                        placeholder="Search articles..."
                         class="search-input"
+                        aria-label="Search articles"
                     >
-                    <button class="clear-search" id="clearSearch" title="Clear search">
-                        <i class="fas fa-times"></i>
+                    <span class="search-kbd" aria-hidden="true">Ctrl K</span>
+                    <button class="clear-search" id="clearSearch" title="Clear search" aria-label="Clear search">
+                        <i class="fas fa-times" aria-hidden="true"></i>
                     </button>
                 </div>
-                
-                <div class="category-filters" id="categoryFilters">
+
+                <div class="category-filters" id="categoryFilters" role="group" aria-label="Filter by category">
                     <button class="category-btn active" data-category="all">
-                        <i class="fas fa-globe"></i>
+                        <i class="fas fa-globe" aria-hidden="true"></i>
                         All
                     </button>
                     {% for category in categories %}
                     <button class="category-btn" data-category="{{ category }}">
                         {% if category == 'Technology' %}
-                            <i class="fas fa-microchip"></i>
+                            <i class="fas fa-microchip" aria-hidden="true"></i>
                         {% elif category == 'Finance' %}
-                            <i class="fas fa-chart-line"></i>
+                            <i class="fas fa-chart-line" aria-hidden="true"></i>
                         {% elif category == 'General News' %}
-                            <i class="fas fa-newspaper"></i>
+                            <i class="fas fa-newspaper" aria-hidden="true"></i>
                         {% elif category == 'Sports' %}
-                            <i class="fas fa-football-ball"></i>
+                            <i class="fas fa-football-ball" aria-hidden="true"></i>
                         {% elif category == 'Science' %}
-                            <i class="fas fa-flask"></i>
+                            <i class="fas fa-flask" aria-hidden="true"></i>
                         {% elif category == 'Business' %}
-                            <i class="fas fa-briefcase"></i>
+                            <i class="fas fa-briefcase" aria-hidden="true"></i>
                         {% elif category == 'Entertainment' %}
-                            <i class="fas fa-film"></i>
+                            <i class="fas fa-film" aria-hidden="true"></i>
                         {% elif category == 'Music' %}
-                            <i class="fas fa-music"></i>
+                            <i class="fas fa-music" aria-hidden="true"></i>
                         {% elif category == 'Health' %}
-                            <i class="fas fa-heartbeat"></i>
+                            <i class="fas fa-heartbeat" aria-hidden="true"></i>
                         {% endif %}
                         {{ category }}
                     </button>
@@ -112,43 +120,44 @@
             <!-- Suggestions Strip (If You Like...) -->
             <div class="suggestions-strip" id="suggestionsStrip" style="display:none;">
                 <div class="suggestions-header">
-                    <i class="fas fa-plus-circle"></i>
+                    <i class="fas fa-plus-circle" aria-hidden="true"></i>
                     <span>If you like <strong id="suggestionsCategoryLabel"></strong>, you might also enjoy:</span>
-                    <button class="suggestions-dismiss" id="suggestionsDismiss" title="Dismiss">
-                        <i class="fas fa-times"></i>
+                    <button class="suggestions-dismiss" id="suggestionsDismiss" title="Dismiss" aria-label="Dismiss suggestions">
+                        <i class="fas fa-times" aria-hidden="true"></i>
                     </button>
                 </div>
                 <div class="suggestions-cards" id="suggestionsCards"></div>
             </div>
 
-            <!-- Top Stories -->
-            <div class="top-stories" id="topStories" style="display:none;">
-                <div class="top-stories-header">
-                    <i class="fas fa-star"></i> Top Stories
-                </div>
+            <!-- Lead Stories hero mosaic -->
+            <section class="top-stories" id="topStories" style="display:none;" aria-label="Lead stories">
+                <h2 class="top-stories-header">
+                    <span class="section-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+                    Lead Stories
+                </h2>
                 <div class="top-stories-cards" id="topStoriesCards"></div>
-            </div>
+            </section>
 
-            <!-- Stats Bar -->
+            <!-- Stats line -->
             <div class="stats-bar">
                 <div class="stat-item">
-                    <i class="fas fa-newspaper"></i>
-                    <span id="articleCount">0</span> articles
+                    <i class="fas fa-newspaper" aria-hidden="true"></i>
+                    <span id="articleCount">0</span>&nbsp;articles
                 </div>
                 <div class="stat-item">
-                    <i class="fas fa-rss"></i>
-                    <span id="feedCount">0</span> feeds
+                    <i class="fas fa-rss" aria-hidden="true"></i>
+                    <span id="feedCount">0</span>&nbsp;feeds
                 </div>
                 <div class="stat-item">
-                    <i class="fas fa-clock"></i>
+                    <i class="fas fa-clock" aria-hidden="true"></i>
                     <span id="lastUpdated">Loading...</span>
                 </div>
             </div>
 
-            <!-- Loading Indicator -->
+            <!-- Loading Indicator (skeletons injected by JS) -->
             <div class="loading" id="loading">
-                <div class="spinner"></div>
-                <p>Loading articles...</p>
+                <div class="skeleton-grid" aria-hidden="true"></div>
+                <p class="sr-only">Loading articles...</p>
             </div>
 
             <!-- Articles Grid -->
@@ -158,27 +167,27 @@
 
             <!-- No Results Message -->
             <div class="no-results" id="noResults" style="display: none;">
-                <i class="fas fa-search"></i>
+                <i class="fas fa-search" aria-hidden="true"></i>
                 <h3>No articles found</h3>
-                <p>Try adjusting your filters or search terms</p>
+                <p>Try a different search or category — or refresh to pull the latest stories.</p>
             </div>
             </div>
 
             <!-- Trending Topics Sidebar -->
-            <aside class="trending-sidebar" id="trendingSidebar">
+            <aside class="trending-sidebar" id="trendingSidebar" aria-label="Trending topics">
                 <div class="sidebar-header">
                     <h2>
-                        <i class="fas fa-fire"></i>
+                        <i class="fas fa-arrow-trend-up" aria-hidden="true"></i>
                         Trending
                     </h2>
-                    <span class="trending-period">Last 24 Hours</span>
+                    <span class="trending-period">Last 24 hours</span>
                 </div>
-                
+
                 <div class="sidebar-loading" id="sidebarLoading">
                     <div class="spinner-small"></div>
                     <p>Loading...</p>
                 </div>
-                
+
                 <div class="trending-list" id="trendingList">
                     <!-- Trending topics will be inserted here -->
                 </div>
@@ -189,10 +198,10 @@
     <!-- Footer -->
     <footer class="footer">
         <div class="container">
-            <p>&copy; 2026 Optio News. Stay informed, stay ahead.</p>
+            <p>&copy; 2026 Optio.News. Stay informed. See what matters.</p>
             <p class="footer-note">
-                <i class="fas fa-info-circle"></i>
-                Articles are fetched from various RSS feeds and cached for 30 minutes
+                <i class="fas fa-info-circle" aria-hidden="true"></i>
+                Articles are fetched from your followed sources and cached for 30 minutes
             </p>
         </div>
     </footer>

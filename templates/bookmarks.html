@@ -3,25 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bookmarks - Optio News</title>
+    <title>Bookmarks — Optio.News</title>
+    <script>
+        document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+    </script>
+    <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="%234EA1FF"/><stop offset=".55" stop-color="%237C5CFF"/><stop offset="1" stop-color="%23A855F7"/></linearGradient></defs><rect x="2" y="24" width="17" height="5" rx="2.5" fill="url(%23g)"/><rect x="7" y="33" width="12" height="5" rx="2.5" fill="url(%23g)"/><rect x="12" y="15" width="9" height="5" rx="2.5" fill="url(%23g)"/><circle cx="38" cy="32" r="20" stroke="url(%23g)" stroke-width="11" fill="none"/></svg>'>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/feeds.css') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/bookmarks.css') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body>
+    <div class="ambient" aria-hidden="true"></div>
     <header class="header">
         <div class="container">
             <div class="header-content">
                 <div class="logo-section">
-                    <i class="fas fa-newspaper logo-icon"></i>
-                    <div>
-                        <h1 class="logo">Optio News</h1>
-                        <p class="tagline">Stay informed, stay ahead.</p>
-                    </div>
+                    {% include '_logo.html' %}
+                    <p class="tagline">Stay informed. See what matters.</p>
                 </div>
                 <div class="header-controls">
                     <a href="/" class="btn-back">
@@ -133,7 +135,7 @@
 
     <footer class="footer">
         <div class="container">
-            <p>&copy; 2026 Optio News. Stay informed, stay ahead.</p>
+            <p>&copy; 2026 Optio.News. Stay informed. See what matters.</p>
         </div>
     </footer>
 
