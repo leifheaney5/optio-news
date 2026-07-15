@@ -4,7 +4,7 @@ import logging
 import feedparser
 import schedule
 import requests as http_requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
@@ -83,6 +83,16 @@ class Bookmark(db.Model):
     image_url = db.Column(db.String(2048))
     tags = db.Column(db.JSON, default=list)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class TopicStat(db.Model):
+    """Daily mention counts per trending topic — the baseline for burst
+    detection ('unusually hot today' vs 'always in the news')."""
+    __tablename__ = 'topic_stats'
+    id = db.Column(db.Integer, primary_key=True)
+    topic = db.Column(db.String(128), nullable=False, index=True)
+    day = db.Column(db.Date, nullable=False)
+    count = db.Column(db.Integer, default=0)
+    __table_args__ = (db.UniqueConstraint('topic', 'day', name='uq_topic_day'),)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -504,6 +514,8 @@ def extract_trending_topics(articles, top_n=10):
         # pronouns
         'their','there','here','his','her','she','he','they','we','you','your',
         'our','my','me','him','them','us','who','whose','whom','what','which',
+        'where','when','why','how','whether','wherever','whenever','whatever',
+        'behind','inside','outside','beyond','despite','among','though','although',
         # common verbs
         'said','says','say','say','told','tell','tells','telling','get','gets',
         'got','getting','make','makes','made','making','see','sees','saw','seen',
@@ -631,24 +643,67 @@ def extract_trending_topics(articles, top_n=10):
                 if trigram not in GENERIC_PHRASES:
                     phrase_articles.setdefault(trigram, set()).add(idx)
 
+    # ── Per-article metadata for diversity + recency scoring ────────────────
+    art_site = [a.get('site', '') for a in recent_articles]
+    art_age_h = []
+    for a in recent_articles:
+        try:
+            age_h = (now - datetime.fromisoformat(a['published'])).total_seconds() / 3600
+        except (ValueError, KeyError, TypeError):
+            age_h = 24.0
+        art_age_h.append(max(0.0, age_h))
+
+    def diversity_mult(art_set):
+        """More distinct outlets → more genuinely trending. A topic pushed by
+        a single outlet many times is that outlet's obsession, not news."""
+        sites = {art_site[i] for i in art_set}
+        if len(sites) == 1 and len(art_set) >= 4:
+            return 0.5
+        return 1.0 + 0.12 * (min(len(sites), 6) - 1)
+
+    def recency_mult(art_set):
+        """Mentions from the last 6 hours count 1.5x — velocity over volume."""
+        weights = [1.5 if art_age_h[i] <= 6 else 1.0 for i in art_set]
+        return sum(weights) / len(weights)
+
+    # ── Proper-noun signals from titles ──────────────────────────────────────
+    proper_noun_counts: dict = {}
+    pair_counts: dict = {}
+    for article in recent_articles:
+        toks = [re.sub(r'[^a-zA-Z]', '', t) for t in article.get('title', '').split()]
+        toks = [t for t in toks if t]
+        for tok in toks:
+            if len(tok) > 3 and tok[0].isupper() and tok.lower() not in STOP:
+                proper_noun_counts[tok.lower()] = proper_noun_counts.get(tok.lower(), 0) + 1
+        # Adjacent capitalised pairs ("Elon Musk", "World Cup") form entities
+        for i in range(len(toks) - 1):
+            a, b = toks[i], toks[i + 1]
+            if (len(a) > 1 and len(b) > 1 and a[0].isupper() and b[0].isupper()
+                    and a.lower() not in STOP and b.lower() not in STOP):
+                key = f"{a.lower()} {b.lower()}"
+                pair_counts[key] = pair_counts.get(key, 0) + 1
+
+    # Words consumed by a recurring entity pair should not trend on their own
+    # (prevents "York" ranking separately from "New York"). Only suppress a
+    # component when the pair itself survived tokenization as a phrase
+    # candidate — otherwise the topic would vanish entirely.
+    merged_components = set()
+    for pair, c in pair_counts.items():
+        if c >= 2 and pair in phrase_articles:
+            merged_components.update(pair.split())
+
     # ── Build candidate list ─────────────────────────────────────────────────
     candidates = []
-
-    # Proper-noun single words: appeared capitalised in ≥2 article titles
-    # Collect proper nouns across all titles
-    proper_noun_counts: dict = {}
-    for article in recent_articles:
-        for tok in article.get('title', '').split():
-            clean = re.sub(r'[^a-zA-Z]', '', tok)
-            if len(clean) > 3 and clean[0].isupper() and clean.lower() not in STOP:
-                proper_noun_counts[clean.lower()] = proper_noun_counts.get(clean.lower(), 0) + 1
 
     for word, art_set in word_articles.items():
         spread = len(art_set)
         if spread < 3:
             continue
+        if word in merged_components:
+            continue  # the entity phrase will carry this word
         is_proper = proper_noun_counts.get(word, 0) >= 2
-        score = spread * (2.5 if is_proper else 1.0)
+        score = (spread * (2.5 if is_proper else 1.0)
+                 * diversity_mult(art_set) * recency_mult(art_set))
         candidates.append({'topic': word, 'score': score, 'spread': spread,
                            'is_phrase': False, 'is_proper': is_proper})
 
@@ -659,9 +714,11 @@ def extract_trending_topics(articles, top_n=10):
         # Phrase is "proper" if at least one word is a known proper noun
         phrase_words = phrase.split()
         is_proper = any(proper_noun_counts.get(w, 0) >= 2 for w in phrase_words)
-        # Prefer longer, more specific phrases
+        # Prefer longer, more specific phrases; recurring title entities most of all
         length_bonus = 1.4 if len(phrase_words) == 3 else 1.2
-        score = spread * length_bonus * (2.5 if is_proper else 1.0)
+        entity_bonus = 1.6 if pair_counts.get(phrase, 0) >= 2 else 1.0
+        score = (spread * length_bonus * entity_bonus * (2.5 if is_proper else 1.0)
+                 * diversity_mult(art_set) * recency_mult(art_set))
         candidates.append({'topic': phrase, 'score': score, 'spread': spread,
                            'is_phrase': True, 'is_proper': is_proper})
 
@@ -692,28 +749,44 @@ def extract_trending_topics(articles, top_n=10):
         trending.append({
             'topic': display,
             'count': c['spread'],
+            'score': round(c['score'], 2),
             'articles': []
         })
 
         if len(trending) >= top_n:
             break
 
-    # ── Attach related articles ───────────────────────────────────────────────
+    # ── Attach related articles + 24h mention sparkline + rising signal ─────
     for td in trending:
         t_lower = td['topic'].lower()
-        found = []
-        for article in recent_articles:
+        matched = []
+        buckets = [0] * 8          # eight 3-hour buckets, oldest → newest
+        last6 = 0
+        prev18 = 0
+        for idx, article in enumerate(recent_articles):
             haystack = f"{article['title']} {article['summary']}".lower()
             if t_lower in haystack or all(w in haystack for w in t_lower.split()):
-                found.append({
-                    'title': article['title'],
-                    'link': article['link'],
-                    'site': article['site'],
-                    'category': article['category']
-                })
-                if len(found) >= 3:
-                    break
-        td['articles'] = found
+                matched.append(article)
+                age = art_age_h[idx]
+                bucket = 7 - min(int(age // 3), 7)
+                buckets[bucket] += 1
+                if age <= 6:
+                    last6 += 1
+                else:
+                    prev18 += 1
+        # Rising: disproportionate share of mentions in the last 6 hours
+        td['rising'] = last6 >= 2 and last6 * 3 > prev18
+        td['buckets'] = buckets
+        td['sites'] = len({a['site'] for a in matched}) if matched else 0
+        # Related articles: prefer ones with imagery
+        matched.sort(key=lambda a: 0 if a.get('image_url') else 1)
+        td['articles'] = [{
+            'title': a['title'],
+            'link': a['link'],
+            'site': a['site'],
+            'category': a['category'],
+            'image_url': a.get('image_url', '')
+        } for a in matched[:3]]
 
     return trending
 
@@ -901,21 +974,90 @@ def get_articles_api():
         'warming': cache_is_warming()
     })
 
+# Memoized trending results, keyed by category, valid for one article-cache
+# generation. Movement ranks persist across generations for ▲/▼ badges.
+_trending_memo = {}
+_trending_prev_ranks = {}
+
+def _apply_burst_scoring(trending):
+    """Re-rank by burstiness: a topic's spread today vs its own 7-day
+    baseline. Kills perennial topics unless they are genuinely spiking."""
+    today = date.today()
+    week_ago = today - timedelta(days=7)
+    try:
+        for td in trending:
+            key = td['topic'].lower()
+            rows = TopicStat.query.filter(
+                TopicStat.topic == key,
+                TopicStat.day < today,
+                TopicStat.day >= week_ago
+            ).all()
+            baseline = (sum(r.count for r in rows) / len(rows)) if rows else 0
+            if baseline == 0:
+                burst = 1.5          # never seen before — genuinely new
+            else:
+                burst = max(0.5, min(3.0, td['count'] / baseline))
+            td['score'] = round(td['score'] * burst, 2)
+
+        trending.sort(key=lambda t: t['score'], reverse=True)
+
+        # Record today's counts (keep the max seen today per topic)
+        for td in trending:
+            key = td['topic'].lower()
+            row = TopicStat.query.filter_by(topic=key, day=today).first()
+            if row:
+                row.count = max(row.count, td['count'])
+            else:
+                db.session.add(TopicStat(topic=key, day=today, count=td['count']))
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logging.warning(f"Burst scoring skipped: {e}")
+    return trending
+
+
 @app.route('/api/trending')
 @login_required
 def get_trending_topics():
-    """API endpoint to get trending topics from last 24 hours"""
-    logging.info("Trending topics API called")
+    """Trending topics from the last 24 hours, optionally per category."""
+    category = request.args.get('category', 'all')
     articles = fetch_articles()
-    logging.info(f"Found {len(articles)} articles for trending analysis")
-    trending = extract_trending_topics(articles, top_n=10)
-    logging.info(f"Extracted {len(trending)} trending topics")
-    
-    return jsonify({
+
+    # Serve memoized results while the article cache generation is unchanged
+    memo = _trending_memo.get(category)
+    if memo and memo[0] == cache_timestamp:
+        return jsonify(memo[1])
+
+    if category != 'all':
+        articles = [a for a in articles if a['category'] == category]
+
+    # Over-fetch so burst re-ranking has room to reshuffle before trimming
+    trending = extract_trending_topics(articles, top_n=20)
+    if category == 'all':
+        trending = _apply_burst_scoring(trending)
+    trending = trending[:10]
+
+    # Movement badges vs the previous computation for this category
+    prev = _trending_prev_ranks.get(category, {})
+    for i, td in enumerate(trending):
+        rank = i + 1
+        if not prev:
+            td['change'] = 0            # first run — no movement story to tell
+        elif td['topic'] not in prev:
+            td['change'] = 'new'
+        else:
+            td['change'] = prev[td['topic']] - rank
+    _trending_prev_ranks[category] = {td['topic']: i + 1 for i, td in enumerate(trending)}
+
+    payload = {
         'trending': trending,
         'count': len(trending),
-        'period': '24 hours'
-    })
+        'period': '24 hours',
+        'category': category
+    }
+    _trending_memo[category] = (cache_timestamp, payload)
+    logging.info(f"Trending computed for '{category}': {len(trending)} topics")
+    return jsonify(payload)
 
 @app.route('/api/refresh')
 @login_required

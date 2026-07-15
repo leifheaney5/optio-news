@@ -119,7 +119,7 @@ async function fetchArticles(forceRefresh = false) {
             const track = document.getElementById('tickerTrack');
             if (track && track.children.length === 0) initTicker();
             const trendingList = document.getElementById('trendingList');
-            if (trendingList && !trendingList.querySelector('.trending-item')) fetchTrendingTopics();
+            if (trendingList && !trendingList.querySelector('.trending-item')) fetchTrendingTopics(currentCategory);
         }
     } catch (error) {
         console.error('Error fetching articles:', error);
@@ -153,7 +153,7 @@ async function initTicker() {
     makeItems().forEach(f => track.appendChild(f)); // duplicate for seamless loop
 }
 
-async function fetchTrendingTopics() {
+async function fetchTrendingTopics(category = 'all') {
     try {
         const sidebarLoading = document.getElementById('sidebarLoading');
         const trendingList = document.getElementById('trendingList');
@@ -161,7 +161,7 @@ async function fetchTrendingTopics() {
         if (sidebarLoading) sidebarLoading.style.display = 'block';
         if (trendingList) trendingList.style.display = 'none';
 
-        const response = await fetch('/api/trending');
+        const response = await fetch(`/api/trending?category=${encodeURIComponent(category)}`);
 
         if (!response.ok) {
             throw new Error('Failed to fetch trending topics');
@@ -171,7 +171,7 @@ async function fetchTrendingTopics() {
         renderTrendingTopics(data.trending || []);
 
         if (sidebarLoading) sidebarLoading.style.display = 'none';
-        if (trendingList) trendingList.style.display = 'block';
+        if (trendingList) trendingList.style.display = ''; // stylesheet decides (flex strip on mobile)
     } catch (error) {
         console.error('Error fetching trending topics:', error);
         const sidebarLoading = document.getElementById('sidebarLoading');
@@ -179,6 +179,24 @@ async function fetchTrendingTopics() {
             sidebarLoading.innerHTML = '<p style="color: var(--text-secondary); font-size: 0.875rem; padding: 1rem;">Unable to load trending topics</p>';
         }
     }
+}
+
+// Tiny 24h mention histogram (eight 3-hour buckets) from real publish times
+function sparklineSvg(buckets) {
+    if (!buckets || !buckets.length) return '';
+    const max = Math.max(...buckets, 1);
+    const bars = buckets.map((v, i) => {
+        const h = Math.max((v / max) * 14, v > 0 ? 2 : 0.75);
+        return `<rect x="${i * 7}" y="${14 - h}" width="5" height="${h}" rx="1" class="${i === buckets.length - 1 ? 'spark-now' : ''}"></rect>`;
+    }).join('');
+    return `<svg class="trending-spark" width="${buckets.length * 7 - 2}" height="14" viewBox="0 0 ${buckets.length * 7 - 2} 14" aria-hidden="true">${bars}</svg>`;
+}
+
+function movementBadge(change) {
+    if (change === 'new') return '<span class="trending-badge trending-badge--new">NEW</span>';
+    if (typeof change === 'number' && change > 0) return `<span class="trending-badge trending-badge--up" title="Up ${change} since last update">▲${change}</span>`;
+    if (typeof change === 'number' && change < 0) return `<span class="trending-badge trending-badge--down" title="Down ${-change} since last update">▼${-change}</span>`;
+    return '';
 }
 
 function renderTrendingTopics(topics) {
@@ -191,13 +209,22 @@ function renderTrendingTopics(topics) {
         return;
     }
 
-    trendingList.innerHTML = topics.map((topic, index) => `
+    trendingList.innerHTML = topics.map((topic, index) => {
+        const thumb = (topic.articles || []).map(a => usableImage({ image_url: a.image_url })).find(Boolean);
+        return `
         <div class="trending-item" style="animation-delay: ${index * 0.05}s">
             <span class="trending-rank" aria-hidden="true">${index + 1}</span>
             <div class="trending-item-content">
                 <div class="trending-item-header">
-                    <div class="trending-item-name">${escapeHtml(topic.topic)}</div>
-                    <span class="trending-item-count" title="Mentioned in ${topic.count} articles">${topic.count}x</span>
+                    <button type="button" class="trending-topic-btn" data-topic="${escapeHtml(topic.topic)}" title="Show articles about ${escapeHtml(topic.topic)}">
+                        ${escapeHtml(topic.topic)}
+                        ${topic.rising ? '<i class="fas fa-arrow-trend-up trending-rising" title="Rising in the last 6 hours" aria-hidden="true"></i>' : ''}
+                    </button>
+                    ${movementBadge(topic.change)}
+                </div>
+                <div class="trending-item-stats">
+                    ${sparklineSvg(topic.buckets)}
+                    <span class="trending-item-count" title="Mentioned in ${topic.count} articles across ${topic.sites || '?'} sources">${topic.count}x · ${topic.sites || 0} sources</span>
                 </div>
                 ${topic.articles && topic.articles.length > 0 ? `
                     <div class="trending-item-articles">
@@ -215,8 +242,9 @@ function renderTrendingTopics(topics) {
                     </div>
                 ` : ''}
             </div>
-        </div>
-    `).join('');
+            ${thumb ? `<img class="trending-thumb" src="${escapeHtml(thumb)}" alt="" loading="lazy" onerror="this.remove()">` : ''}
+        </div>`;
+    }).join('');
 }
 
 // ==================== View Mode ====================
@@ -483,6 +511,9 @@ function setCategory(category) {
         if (elements.suggestionsStrip) elements.suggestionsStrip.style.display = 'none';
         renderTopStories(allArticles);
     }
+
+    // Trending follows the selected category
+    fetchTrendingTopics(category);
 }
 
 function setSearch(query) {
@@ -761,6 +792,19 @@ function initEventListeners() {
     // View toggle
     if (elements.viewToggle) {
         elements.viewToggle.addEventListener('click', toggleViewMode);
+    }
+
+    // Trending topic → filter the feed to that topic
+    const trendingListEl = document.getElementById('trendingList');
+    if (trendingListEl) {
+        trendingListEl.addEventListener('click', (e) => {
+            const btn = e.target.closest('.trending-topic-btn');
+            if (!btn) return;
+            const topic = btn.dataset.topic || '';
+            elements.searchInput.value = topic;
+            setSearch(topic);
+            elements.searchInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        });
     }
 
     // Suggestions dismiss
