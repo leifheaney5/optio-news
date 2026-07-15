@@ -15,7 +15,12 @@
 
     btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        menu.hidden ? openMenu() : closeMenu();
+        if (menu.hidden) {
+            openMenu();
+            loadHiddenFeeds();
+        } else {
+            closeMenu();
+        }
     });
     document.addEventListener('click', (e) => {
         if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) closeMenu();
@@ -39,6 +44,97 @@
         });
     }
     applyTickerPref();
+
+    // --- Default news view (grid | list) ---
+    const viewSelect = document.getElementById('settingsViewMode');
+    if (viewSelect) {
+        viewSelect.value = localStorage.getItem('viewMode') || 'grid';
+        viewSelect.addEventListener('change', () => {
+            localStorage.setItem('viewMode', viewSelect.value);
+            // Re-render live if the news page is open
+            if (typeof window.optioSetViewMode === 'function') {
+                window.optioSetViewMode(viewSelect.value);
+            }
+        });
+    }
+
+    // --- Article density (comfortable | compact) ---
+    const densitySelect = document.getElementById('settingsDensity');
+    function applyDensity() {
+        const d = localStorage.getItem('density') || 'comfortable';
+        document.documentElement.setAttribute('data-density', d);
+        if (densitySelect) densitySelect.value = d;
+    }
+    if (densitySelect) {
+        densitySelect.addEventListener('change', () => {
+            localStorage.setItem('density', densitySelect.value);
+            applyDensity();
+        });
+    }
+    applyDensity();
+
+    // --- Auto-refresh interval ---
+    const refreshSelect = document.getElementById('settingsRefresh');
+    if (refreshSelect) {
+        refreshSelect.value = localStorage.getItem('refreshMins') || '30';
+        refreshSelect.addEventListener('change', () => {
+            localStorage.setItem('refreshMins', refreshSelect.value);
+            if (typeof window.optioRestartAutoRefresh === 'function') {
+                window.optioRestartAutoRefresh();
+            }
+        });
+    }
+
+    // --- Hidden feeds: list + one-click restore ---
+    const hiddenFeedsBox = document.getElementById('settingsHiddenFeeds');
+    async function loadHiddenFeeds() {
+        if (!hiddenFeedsBox) return;
+        try {
+            const res = await fetch('/api/feeds');
+            if (!res.ok) throw new Error();
+            const data = await res.json();
+            const hidden = (data.feeds || []).filter(f => f.hidden);
+            if (!hidden.length) {
+                hiddenFeedsBox.innerHTML = '<p class="settings-feeds-empty">No hidden feeds</p>';
+                return;
+            }
+            hiddenFeedsBox.innerHTML = '';
+            hidden.forEach(f => {
+                const row = document.createElement('div');
+                row.className = 'settings-feed-row';
+                const name = document.createElement('span');
+                name.className = 'settings-feed-name';
+                name.textContent = f.name;
+                name.title = f.url;
+                const restore = document.createElement('button');
+                restore.type = 'button';
+                restore.className = 'settings-feed-restore';
+                restore.textContent = 'Restore';
+                restore.addEventListener('click', async () => {
+                    restore.disabled = true;
+                    try {
+                        const r = await fetch('/api/feeds/unhide', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: f.url })
+                        });
+                        if (!r.ok) throw new Error();
+                        row.remove();
+                        if (!hiddenFeedsBox.querySelector('.settings-feed-row')) {
+                            hiddenFeedsBox.innerHTML = '<p class="settings-feeds-empty">No hidden feeds</p>';
+                        }
+                    } catch {
+                        restore.disabled = false;
+                    }
+                });
+                row.appendChild(name);
+                row.appendChild(restore);
+                hiddenFeedsBox.appendChild(row);
+            });
+        } catch {
+            hiddenFeedsBox.innerHTML = '<p class="settings-feeds-empty">Couldn\'t load feeds</p>';
+        }
+    }
 
     // --- Export bookmarks as Markdown ---
     const exportBtn = document.getElementById('settingsExport');

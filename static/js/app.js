@@ -801,12 +801,26 @@ function initEventListeners() {
 }
 
 // ==================== Auto-refresh ====================
+let autoRefreshTimer = null;
+
 function startAutoRefresh() {
-    // Refresh articles every 30 minutes
-    setInterval(() => {
+    if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+    const pref = localStorage.getItem('refreshMins') || '30';
+    if (pref === 'off') return;
+    const mins = parseInt(pref, 10) || 30;
+    autoRefreshTimer = setInterval(() => {
         fetchArticles(true);
-    }, 30 * 60 * 1000);
+    }, mins * 60 * 1000);
 }
+
+// Hooks for the settings menu (settings.js)
+window.optioRestartAutoRefresh = startAutoRefresh;
+window.optioSetViewMode = (mode) => {
+    viewMode = mode === 'list' ? 'list' : 'grid';
+    applyViewMode();
+    renderArticles();
+};
 
 // ==================== Initialization ====================
 async function init() {

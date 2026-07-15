@@ -8,10 +8,40 @@
             <i class="fas fa-user-circle" aria-hidden="true"></i>
             <span title="{{ user.email }}">{{ user.email }}</span>
         </div>
+        <div class="settings-label">Preferences</div>
         <label class="settings-item">
             <input type="checkbox" id="settingsTicker" checked>
             <span>Show headline ticker</span>
         </label>
+        <label class="settings-item settings-item--select">
+            <span>Default news view</span>
+            <select id="settingsViewMode" class="settings-select">
+                <option value="grid">Grid</option>
+                <option value="list">List</option>
+            </select>
+        </label>
+        <label class="settings-item settings-item--select">
+            <span>Article density</span>
+            <select id="settingsDensity" class="settings-select">
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+            </select>
+        </label>
+        <label class="settings-item settings-item--select">
+            <span>Auto-refresh</span>
+            <select id="settingsRefresh" class="settings-select">
+                <option value="15">Every 15 min</option>
+                <option value="30">Every 30 min</option>
+                <option value="60">Every hour</option>
+                <option value="off">Off</option>
+            </select>
+        </label>
+        <hr class="settings-divider">
+        <div class="settings-label">Hidden feeds</div>
+        <div class="settings-feeds" id="settingsHiddenFeeds">
+            <p class="settings-feeds-empty">Loading…</p>
+        </div>
+        <hr class="settings-divider">
         <button class="settings-item" id="settingsExport" type="button">
             <i class="fas fa-file-alt" aria-hidden="true"></i>
             Export bookmarks (.md)
