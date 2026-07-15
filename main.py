@@ -15,12 +15,17 @@ from email.mime.text import MIMEText
 from dotenv import load_dotenv
 import smtplib
 import threading
+import socket
+from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, Counter
 import re
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
+
+# A single unreachable feed must never hang the whole fetch
+socket.setdefaulttimeout(10)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-change-in-prod')
@@ -208,6 +213,8 @@ rss_feeds = {
 # Global cache for articles
 articles_cache = []
 cache_timestamp = None
+# Single-flight guard: only one thread fetches the 70+ feeds at a time
+_fetch_lock = threading.Lock()
 
 # ==================== Per-User Feed Helpers ====================
 
@@ -281,94 +288,161 @@ available_feeds = {
     ]
 }
 
+def _fetch_one_feed(category, url):
+    """Fetch and parse a single RSS feed. Returns a list of article dicts."""
+    logging.info(f"Fetching: {url}")
+    out = []
+    try:
+        feed = feedparser.parse(url)
+    except Exception as e:
+        logging.warning(f"Feed fetch failed, skipping: {url} ({e})")
+        return out
+    if feed.bozo:
+        logging.warning(f"Bad feed, skipping: {url}")
+        return out
+
+    for entry in feed.entries[:8]:
+        try:
+            # Get publication date
+            pub_date = datetime.now()
+            try:
+                if hasattr(entry, 'published_parsed') and entry.published_parsed:
+                    time_tuple = entry.published_parsed
+                    pub_date = datetime(int(time_tuple[0]), int(time_tuple[1]), int(time_tuple[2]),
+                                      int(time_tuple[3]), int(time_tuple[4]), int(time_tuple[5]))
+                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+                    time_tuple = entry.updated_parsed
+                    pub_date = datetime(int(time_tuple[0]), int(time_tuple[1]), int(time_tuple[2]),
+                                      int(time_tuple[3]), int(time_tuple[4]), int(time_tuple[5]))
+            except (ValueError, TypeError, IndexError):
+                # If date parsing fails, use current time
+                pass
+
+            domain = url.split('/')[2] if len(url.split('/')) > 2 else url
+
+            # Extract image from media_thumbnail, media_content, or enclosure
+            image_url = ''
+            if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
+                image_url = entry.media_thumbnail[0].get('url', '')
+            elif hasattr(entry, 'media_content') and entry.media_content:
+                image_url = entry.media_content[0].get('url', '')
+            elif hasattr(entry, 'enclosures') and entry.enclosures:
+                for enc in entry.enclosures:
+                    if enc.get('type', '').startswith('image/'):
+                        image_url = enc.get('href', enc.get('url', ''))
+                        break
+            # Fallback: pull first <img> from summary or full-content HTML
+            if not image_url:
+                html_blobs = [getattr(entry, 'summary', '')]
+                for c in (getattr(entry, 'content', None) or []):
+                    html_blobs.append(c.get('value', ''))
+                for blob in html_blobs:
+                    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', blob)
+                    if m:
+                        image_url = m.group(1)
+                        break
+
+            out.append({
+                'title': entry.title,
+                'author': getattr(entry, 'author', 'N/A'),
+                'link': entry.link,
+                'summary': getattr(entry, 'summary', 'No summary available'),
+                'category': category,
+                'site': domain,
+                'feed_url': url,
+                'published': pub_date.isoformat(),
+                'published_display': pub_date.strftime('%b %d, %Y %I:%M %p'),
+                'image_url': image_url,
+            })
+        except AttributeError as e:
+            logging.warning(f"Missing attribute in entry from {url}: {e}. Skipping entry.")
+        except Exception as e:
+            logging.error(f"Error processing entry from {url}: {e}")
+    return out
+
+
+def _extract_og_image(url):
+    """Fetch a page and return its og:image / twitter:image URL, if any."""
+    try:
+        resp = http_requests.get(url, timeout=6, headers={
+            'User-Agent': 'Mozilla/5.0 (compatible; OptioBotPreview/1.0)'
+        })
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, 'lxml')
+        tag = (soup.find('meta', property='og:image')
+               or soup.find('meta', attrs={'name': 'twitter:image'})
+               or soup.find('meta', attrs={'property': 'twitter:image'}))
+        if tag and tag.get('content'):
+            img = tag['content'].strip()
+            if img.startswith('http'):
+                return img
+    except Exception:
+        pass
+    return ''
+
+
+def _enrich_missing_images(articles, max_lookups=160):
+    """For articles whose feed carried no image, pull og:image from the
+    article page itself. Runs in parallel; failures just leave the article
+    on the headline-first treatment."""
+    missing = [a for a in articles if not a.get('image_url')][:max_lookups]
+    if not missing:
+        return
+    logging.info(f"Enriching {len(missing)} articles with og:image lookups")
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        for article, img in zip(missing, pool.map(lambda a: _extract_og_image(a['link']), missing)):
+            if img:
+                article['image_url'] = img
+    found = sum(1 for a in missing if a.get('image_url'))
+    logging.info(f"og:image enrichment found {found}/{len(missing)} images")
+
+
 def fetch_articles(force_refresh=False):
-    """Fetch articles from RSS feeds with caching"""
+    """Fetch articles from RSS feeds with caching.
+
+    Feeds are fetched in parallel, and only one fetch runs at a time
+    process-wide: concurrent callers get the current cache immediately
+    instead of piling up duplicate 70-feed crawls.
+    """
     global articles_cache, cache_timestamp
-    
+
     # Return cached articles if less than 30 minutes old
     if not force_refresh and cache_timestamp and articles_cache:
         age = datetime.now() - cache_timestamp
         if age < timedelta(minutes=30):
             logging.info("Returning cached articles")
             return articles_cache
-    
-    articles = []
-    domain_to_category = {}
-    
-    # Build domain to category mapping
-    for category, urls in rss_feeds.items():
-        for url in urls:
-            domain = url.split('/')[2] if len(url.split('/')) > 2 else url
-            domain_to_category[domain] = category
-    
-    for category, urls in rss_feeds.items():
-        for url in urls:
-            logging.info(f"Fetching: {url}")
-            feed = feedparser.parse(url)
-            if feed.bozo:
-                logging.warning(f"Bad feed, skipping: {url}")
-                continue
-            
-            for entry in feed.entries[:8]:  # Increased from 5 to 8 per feed
-                try:
-                    # Get publication date
-                    pub_date = datetime.now()
-                    try:
-                        if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                            time_tuple = entry.published_parsed
-                            pub_date = datetime(int(time_tuple[0]), int(time_tuple[1]), int(time_tuple[2]), 
-                                              int(time_tuple[3]), int(time_tuple[4]), int(time_tuple[5]))
-                        elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                            time_tuple = entry.updated_parsed
-                            pub_date = datetime(int(time_tuple[0]), int(time_tuple[1]), int(time_tuple[2]),
-                                              int(time_tuple[3]), int(time_tuple[4]), int(time_tuple[5]))
-                    except (ValueError, TypeError, IndexError):
-                        # If date parsing fails, use current time
-                        pass
-                    
-                    domain = url.split('/')[2] if len(url.split('/')) > 2 else url
-                    
-                    # Extract image from media_thumbnail, media_content, or enclosure
-                    image_url = ''
-                    if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
-                        image_url = entry.media_thumbnail[0].get('url', '')
-                    elif hasattr(entry, 'media_content') and entry.media_content:
-                        image_url = entry.media_content[0].get('url', '')
-                    elif hasattr(entry, 'enclosures') and entry.enclosures:
-                        for enc in entry.enclosures:
-                            if enc.get('type', '').startswith('image/'):
-                                image_url = enc.get('href', enc.get('url', ''))
-                                break
-                    # Fallback: pull first <img> from summary HTML
-                    if not image_url:
-                        summary_html = getattr(entry, 'summary', '')
-                        import re as _re
-                        m = _re.search(r'<img[^>]+src=["\']([^"\']+)["\']', summary_html)
-                        if m:
-                            image_url = m.group(1)
 
-                    articles.append({
-                        'title': entry.title,
-                        'author': getattr(entry, 'author', 'N/A'),
-                        'link': entry.link,
-                        'summary': getattr(entry, 'summary', 'No summary available'),
-                        'category': category,
-                        'site': domain,
-                        'feed_url': url,
-                        'published': pub_date.isoformat(),
-                        'published_display': pub_date.strftime('%b %d, %Y %I:%M %p'),
-                        'image_url': image_url,
-                    })
-                except AttributeError as e:
-                    logging.warning(f"Missing attribute in entry from {url}: {e}. Skipping entry.")
-                except Exception as e:
-                    logging.error(f"Error processing entry from {url}: {e}")
-    
-    # Update cache
-    articles_cache = articles
-    cache_timestamp = datetime.now()
-    
-    return articles
+    if not _fetch_lock.acquire(blocking=False):
+        # Another thread is already crawling the feeds — serve what we have.
+        logging.info("Fetch already in progress; returning current cache")
+        return articles_cache
+
+    try:
+        # Snapshot to avoid mutation while iterating
+        pairs = [(category, url)
+                 for category, urls in rss_feeds.items()
+                 for url in list(urls)]
+
+        articles = []
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            for feed_articles in pool.map(lambda p: _fetch_one_feed(*p), pairs):
+                articles.extend(feed_articles)
+
+        # Image-forward: fill in missing article imagery from the pages themselves
+        _enrich_missing_images(articles)
+
+        # Update cache
+        articles_cache = articles
+        cache_timestamp = datetime.now()
+        return articles
+    finally:
+        _fetch_lock.release()
+
+
+def cache_is_warming():
+    """True while the very first crawl is still running (no cache yet)."""
+    return cache_timestamp is None and _fetch_lock.locked()
 
 def extract_trending_topics(articles, top_n=10):
     """
@@ -789,7 +863,10 @@ def get_articles_api():
         'articles': articles,
         'count': len(articles),
         'cached': cache_timestamp.isoformat() if cache_timestamp else None,
-        'feed_count': active_feeds
+        'feed_count': active_feeds,
+        # True only during the very first crawl after startup — tells the
+        # frontend to keep its skeletons up and retry shortly.
+        'warming': cache_is_warming()
     })
 
 @app.route('/api/trending')

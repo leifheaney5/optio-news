@@ -121,11 +121,29 @@ async function fetchArticles(forceRefresh = false) {
             return fetchArticles(false);
         }
 
+        // Server is still doing its first crawl of the feeds — keep the
+        // skeletons up and check back in a few seconds.
+        if (data.warming && (!data.articles || data.articles.length === 0)) {
+            elements.lastUpdated.textContent = 'Warming up your feeds…';
+            setTimeout(() => fetchArticles(false), 4000);
+            return;
+        }
+
         allArticles = data.articles || [];
         applyFilters();
         updateStats(data);
 
         hideLoading();
+
+        // If the first paint happened while the server was still warming,
+        // the hero, ticker and trending rendered empty — fill them in now.
+        if (allArticles.length) {
+            if (currentCategory === 'all') renderTopStories(allArticles);
+            const track = document.getElementById('tickerTrack');
+            if (track && track.children.length === 0) initTicker();
+            const trendingList = document.getElementById('trendingList');
+            if (trendingList && !trendingList.querySelector('.trending-item')) fetchTrendingTopics();
+        }
     } catch (error) {
         console.error('Error fetching articles:', error);
         showError('Failed to load articles. Please try again.');
@@ -356,7 +374,7 @@ function renderTopStories(articles) {
         card.style.animationDelay = `${i * 0.07}s`;
 
         const isLead = slot === 'hero-card--lead';
-        const summary = isLead ? stripHtmlTags(art.summary || '').substring(0, 180) : '';
+        const summary = isLead ? cleanSummaryText(art.summary).substring(0, 180) : '';
 
         card.innerHTML = `
             ${img ? `<img src="${escapeHtml(img)}" alt="" ${i === 0 ? 'fetchpriority="high"' : 'loading="lazy"'}>` : ''}
@@ -563,7 +581,7 @@ function createArticleRow(article, index) {
 function pickCardVariant(article, index) {
     const img = usableImage(article);
     if (!img) return 'text';
-    const summaryLen = stripHtmlTags(article.summary || '').length;
+    const summaryLen = cleanSummaryText(article.summary).length;
     if (summaryLen > 140 && index % 5 === 2) return 'wide';
     return 'visual';
 }
@@ -578,7 +596,7 @@ function createArticleCard(article, index) {
     const categoryClass = article.category.replace(/\s+/g, '.');
 
     // Strip HTML tags from summary and limit length
-    const cleanSummary = stripHtmlTags(article.summary || '');
+    const cleanSummary = cleanSummaryText(article.summary);
     const truncatedSummary = cleanSummary.length > 220
         ? cleanSummary.substring(0, 220) + '…'
         : cleanSummary;
@@ -663,6 +681,15 @@ function stripHtmlTags(html) {
     const div = document.createElement('div');
     div.innerHTML = html;
     return div.textContent || div.innerText || '';
+}
+
+// Some feeds ship junk summaries ("null", "No summary available", one word).
+// Treat those as no summary so cards fall back to headline-led layouts.
+function cleanSummaryText(raw) {
+    const text = stripHtmlTags(raw || '').trim();
+    if (!text || text.length < 8) return '';
+    if (/^(null|undefined|no summary available\.?)$/i.test(text)) return '';
+    return text;
 }
 
 function updateStats(data) {
