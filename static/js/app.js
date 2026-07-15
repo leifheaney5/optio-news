@@ -14,7 +14,6 @@ const elements = {
     searchInput: document.getElementById('searchInput'),
     clearSearch: document.getElementById('clearSearch'),
     categoryFilters: document.getElementById('categoryFilters'),
-    themeToggle: document.getElementById('themeToggle'),
     refreshBtn: document.getElementById('refreshBtn'),
     articleCount: document.getElementById('articleCount'),
     feedCount: document.getElementById('feedCount'),
@@ -28,28 +27,6 @@ const elements = {
     topStoriesCards: document.getElementById('topStoriesCards'),
     header: document.getElementById('siteHeader')
 };
-
-// ==================== Theme Management ====================
-function initTheme() {
-    // Dark is the Optio.News brand default; light is the calm reading variant
-    const savedTheme = localStorage.getItem('theme') || 'dark';
-    document.documentElement.setAttribute('data-theme', savedTheme);
-    updateThemeIcon(savedTheme);
-}
-
-function toggleTheme() {
-    const currentTheme = document.documentElement.getAttribute('data-theme');
-    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-
-    document.documentElement.setAttribute('data-theme', newTheme);
-    localStorage.setItem('theme', newTheme);
-    updateThemeIcon(newTheme);
-}
-
-function updateThemeIcon(theme) {
-    const icon = elements.themeToggle.querySelector('i');
-    icon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
-}
 
 // ==================== Image helpers ====================
 // RSS feeds ship plenty of junk "images": tracking pixels, feed badges, svg logos.
@@ -749,9 +726,6 @@ function showError(message) {
 
 // ==================== Event Listeners ====================
 function initEventListeners() {
-    // Theme toggle
-    elements.themeToggle.addEventListener('click', toggleTheme);
-
     // Refresh button
     elements.refreshBtn.addEventListener('click', async () => {
         elements.refreshBtn.querySelector('i').style.animation = 'spin 0.6s ease';
@@ -836,9 +810,6 @@ function startAutoRefresh() {
 
 // ==================== Initialization ====================
 async function init() {
-    // Initialize theme
-    initTheme();
-
     // Setup event listeners
     initEventListeners();
 

@@ -16,30 +16,8 @@ const elements = {
     activeCount: document.getElementById('activeCount'),
     availableCount: document.getElementById('availableCount'),
     loading: document.getElementById('loading'),
-    themeToggle: document.getElementById('themeToggle'),
     availableCategories: document.getElementById('availableCategories')
 };
-
-// ==================== Theme Management ====================
-function initTheme() {
-    const savedTheme = localStorage.getItem('theme') || 'dark';
-    document.documentElement.setAttribute('data-theme', savedTheme);
-    updateThemeIcon(savedTheme);
-}
-
-function toggleTheme() {
-    const currentTheme = document.documentElement.getAttribute('data-theme');
-    const newTheme = currentTheme === 'light' ? 'dark' : 'light';
-    
-    document.documentElement.setAttribute('data-theme', newTheme);
-    localStorage.setItem('theme', newTheme);
-    updateThemeIcon(newTheme);
-}
-
-function updateThemeIcon(theme) {
-    const icon = elements.themeToggle.querySelector('i');
-    icon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
-}
 
 // ==================== API Functions ====================
 async function loadActiveFeeds() {
@@ -343,9 +321,6 @@ function showToast(message, type = 'success') {
 
 // ==================== Event Listeners ====================
 function initEventListeners() {
-    // Theme toggle
-    elements.themeToggle.addEventListener('click', toggleTheme);
-    
     // Tab switching
     elements.tabBtns.forEach(btn => {
         btn.addEventListener('click', () => {
@@ -397,9 +372,6 @@ function initEventListeners() {
 
 // ==================== Initialization ====================
 async function init() {
-    // Initialize theme
-    initTheme();
-    
     // Setup event listeners
     initEventListeners();
 

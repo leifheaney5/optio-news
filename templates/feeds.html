@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Feeds — Optio.News</title>
     <script>
-        document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+        document.documentElement.setAttribute('data-theme', 'dark');
     </script>
     <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="10" y1="6" x2="54" y2="58" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="%234EA1FF"/><stop offset=".55" stop-color="%237C5CFF"/><stop offset="1" stop-color="%23A855F7"/></linearGradient></defs><rect x="2" y="24" width="17" height="5" rx="2.5" fill="url(%23g)"/><rect x="7" y="33" width="12" height="5" rx="2.5" fill="url(%23g)"/><rect x="12" y="15" width="9" height="5" rx="2.5" fill="url(%23g)"/><circle cx="38" cy="32" r="20" stroke="url(%23g)" stroke-width="11" fill="none"/></svg>'>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
@@ -25,21 +25,13 @@
                     {% include '_logo.html' %}
                     <p class="tagline">Stay informed. See what matters.</p>
                 </div>
+                <nav class="site-nav" aria-label="Primary">
+                    <a href="/" class="site-nav-link">News</a>
+                    <a href="/feeds" class="site-nav-link active" aria-current="page">RSS Feeds</a>
+                    <a href="/bookmarks" class="site-nav-link">Bookmarks</a>
+                </nav>
                 <div class="header-controls">
-                    <a href="/bookmarks" class="manage-feeds-btn" title="Bookmarks">
-                        <i class="fas fa-bookmark"></i>
-                    </a>
-                    <a href="/" class="btn-back">
-                        <i class="fas fa-arrow-left"></i>
-                        Back to News
-                    </a>
-                    <button class="theme-toggle" id="themeToggle" title="Toggle theme">
-                        <i class="fas fa-moon"></i>
-                    </button>
-                    <a href="/logout" class="user-menu" title="Sign out ({{ user.email }})">
-                        <i class="fas fa-user-circle"></i>
-                        <span class="user-email">{{ user.email }}</span>
-                    </a>
+                    {% include '_settings.html' %}
                 </div>
             </div>
         </div>
@@ -134,5 +126,6 @@
     </footer>
 
     <script src="{{ url_for('static', filename='js/feeds.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
 </body>
 </html>

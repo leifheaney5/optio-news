@@ -193,22 +193,22 @@ function createBookmarkCard(b) {
     const host = (() => { try { return new URL(b.url).hostname.replace('www.', ''); } catch { return b.url; } })();
 
     return `
-    <div class="bm-card" data-id="${b.id}">
+    <div class="bm-card ${b.image_url ? '' : 'bm-card--noimg'}" data-id="${b.id}">
         ${img}
         <div class="bm-body">
             <h3 class="bm-title">
                 <a href="${escapeHtml(b.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(b.title)}</a>
             </h3>
             ${desc}
-            <div class="bm-meta">
-                <span class="bm-host"><i class="fas fa-globe"></i> ${escapeHtml(host)}</span>
-                <span class="bm-date">${formatDate(b.created_at)}</span>
-            </div>
             ${tags ? `<div class="bm-tags">${tags}</div>` : ''}
+            <div class="bm-meta">
+                <span class="bm-host"><i class="fas fa-globe" aria-hidden="true"></i> ${escapeHtml(host)}</span>
+                <span class="bm-date">Saved ${formatDate(b.created_at)}</span>
+            </div>
         </div>
-        <div class="bm-actions">
-            <button class="bm-action-btn" onclick="openEditModal(${b.id})" title="Edit"><i class="fas fa-pencil-alt"></i></button>
-            <button class="bm-action-btn bm-delete-btn" onclick="deleteBookmark(${b.id})" title="Delete"><i class="fas fa-trash"></i></button>
+        <div class="bm-actions-float">
+            <button class="bm-action-btn" onclick="openEditModal(${b.id})" title="Edit" aria-label="Edit bookmark"><i class="fas fa-pencil-alt" aria-hidden="true"></i></button>
+            <button class="bm-action-btn bm-delete-btn" onclick="deleteBookmark(${b.id})" title="Delete" aria-label="Delete bookmark"><i class="fas fa-trash" aria-hidden="true"></i></button>
         </div>
     </div>`;
 }
@@ -309,8 +309,4 @@ tagFilters.addEventListener('click', e => {
 });
 
 // ==================== Init ====================
-// Apply saved theme
-const saved = localStorage.getItem('theme') || 'dark';
-document.documentElement.setAttribute('data-theme', saved);
-
 loadBookmarks();
