@@ -207,6 +207,38 @@ rss_feeds = {
         "https://www.mayoclinic.org/rss",
         "https://www.everydayhealth.com/rss/",
         "https://www.menshealth.com/rss/all.xml/"
+    ],
+
+    "Politics": [
+        "https://www.politico.com/rss/politics08.xml",
+        "https://thehill.com/feed/",
+        "https://feeds.npr.org/1014/rss.xml",
+        "https://www.theguardian.com/politics/rss",
+        "https://feeds.bbci.co.uk/news/politics/rss.xml"
+    ],
+
+    "Gaming": [
+        "https://www.polygon.com/rss/index.xml",
+        "https://kotaku.com/rss",
+        "https://www.pcgamer.com/rss/",
+        "https://www.eurogamer.net/feed",
+        "https://www.gamespot.com/feeds/mashup/"
+    ],
+
+    "Travel": [
+        "https://www.atlasobscura.com/feeds/latest",
+        "https://skift.com/feed/",
+        "https://www.cntraveler.com/feed/rss",
+        "https://www.travelpulse.com/rss.xml",
+        "https://www.lonelyplanet.com/news/feed/atom/"
+    ],
+
+    "Food": [
+        "https://www.eater.com/rss/index.xml",
+        "https://www.bonappetit.com/feed/rss",
+        "https://www.seriouseats.com/rss",
+        "https://food52.com/blog.rss",
+        "https://www.foodandwine.com/feeds/all"
     ]
 }
 

@@ -277,7 +277,7 @@ body {
 .logo-section { display: flex; align-items: center; gap: 14px; min-width: 0; }
 .tagline {
     font-size: 0.8rem;
-    color: var(--text-tertiary);
+    color: var(--text-primary);
     font-weight: 500;
     letter-spacing: 0.02em;
     white-space: nowrap;
@@ -368,7 +368,7 @@ body {
     align-items: center;
     height: 100%;
     white-space: nowrap;
-    animation: ticker-scroll 60s linear infinite;
+    animation: ticker-scroll 120s linear infinite;
     will-change: transform;
     width: max-content;
 }
@@ -570,15 +570,17 @@ body {
     padding: 14px 50px 14px 48px;
     border: 1px solid var(--glass-border);
     border-radius: var(--r-md);
-    background: var(--glass-content);
-    -webkit-backdrop-filter: blur(12px);
-    backdrop-filter: blur(12px);
-    color: var(--text-primary);
+    background: #FFFFFF;
+    color: #131A3A;
     font-size: 1rem;
     font-family: inherit;
     transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
-.search-input::placeholder { color: var(--text-tertiary); }
+.search-input::placeholder { color: #8890B4; }
+.search-box .search-icon { color: #8890B4; }
+.search-box .clear-search { color: #8890B4; }
+.search-box .clear-search:hover { color: #131A3A; }
+.search-box .search-kbd { color: #8890B4; border-color: rgba(52, 66, 128, 0.22); }
 .search-input:focus {
     outline: none;
     border-color: var(--brand-indigo);
@@ -986,6 +988,10 @@ body {
 .category-badge.Entertainment { color: var(--entertainment); }
 .category-badge.Music         { color: var(--music); }
 .category-badge.Health        { color: var(--health); }
+.category-badge.Politics      { color: #8B9DFF; }
+.category-badge.Gaming        { color: #5EEAD4; }
+.category-badge.Travel        { color: #7DD3FC; }
+.category-badge.Food          { color: #D8B4FE; }
 [data-theme="light"] .category-badge { background: rgba(19, 26, 58, 0.78); }
 
 .bookmark-btn {
