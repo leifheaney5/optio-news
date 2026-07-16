@@ -17,10 +17,11 @@ $r = Invoke-WebRequest 'https://optio.news/register' -Method POST -Body @{email=
 Check "Register (200)"          ($r.StatusCode -eq 200)
 Check "Register → main page"   ($r.Content -match 'articlesGrid')
 
-# 2 API articles
+# 2 API articles — an empty list is OK only while the server reports it is
+# still warming its cache (first crawl after a deploy)
 $arts = Invoke-RestMethod 'https://optio.news/api/articles' -WebSession $s
 Check "GET /api/articles (200)"   ($null -ne $arts.articles)
-Check "Articles non-empty"        ($arts.articles.Count -gt 0) "count=$($arts.articles.Count)"
+Check "Articles present (or warming)" ($arts.articles.Count -gt 0 -or $arts.warming -eq $true) "count=$($arts.articles.Count) warming=$($arts.warming)"
 Check "feed_count > 0"            ($arts.feed_count -gt 0)
 
 # 3 API refresh
