@@ -1,0 +1,34 @@
+{
+  "pageTitle": "Optio.News — Case Study",
+  "seoTitle": "Optio.News Case Study: Building an Image-Forward RSS News Platform (Flask, Python)",
+  "metaDescription": "How I turned 94 raw RSS feeds into a fast, image-led news platform — parallel crawling, og:image enrichment, burst-based trend detection, and a clear-glass UI. Live at optio.news.",
+  "slug": "optio-news",
+  "category": "Full-Stack Product Engineering",
+  "skills": [
+    "Data pipeline design",
+    "Concurrency",
+    "Algorithm design (trend detection)",
+    "UI / design systems",
+    "Accessibility",
+    "Testing",
+    "CI/CD",
+    "AI-assisted development"
+  ],
+  "tools": ["Python", "Flask", "SQLAlchemy", "PostgreSQL", "JavaScript", "CSS", "pytest", "Playwright", "Railway"],
+  "industryTags": ["Media", "News Aggregation", "Consumer Web"],
+  "thumbnail": {
+    "image": "images/after.jpg",
+    "text": "60% → 98% image coverage"
+  },
+  "links": {
+    "live": "https://optio.news",
+    "source": "https://github.com/leifheaney5/optio-news"
+  },
+  "cardSummary": "Optio.News aggregates 94 news sources into an image-forward, editorial reading experience. I built the full stack solo: a parallel crawl pipeline with og:image enrichment (60%→98% image coverage), burst-based trend detection, and an adaptive card UI — live in production on Flask with a 56-test suite.",
+  "headlineMetrics": [
+    { "value": "98%", "label": "of articles carry real photography", "baseline": "was ~60%, measured 328/336 live" },
+    { "value": "Instant", "label": "first paint at any cache state", "baseline": "was a multi-minute blocked load" },
+    { "value": "56/56", "label": "tests passing on every deploy", "baseline": "suite runtime 35s → 17s" },
+    { "value": "94", "label": "sources across 13 categories", "baseline": "~450 articles per refresh" }
+  ]
+}
