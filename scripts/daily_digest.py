@@ -7,9 +7,18 @@ reuse its cache instead of launching a duplicate feed crawl.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+import sys
 import time
 
-from main import app, cache_is_warming, create_email_content, fetch_articles, send_email
+# ``python scripts/daily_digest.py`` makes scripts/ sys.path[0]; explicitly add
+# the repository root so importing the existing application module is reliable
+# in Railway and local shells alike.
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from main import app, cache_is_warming, create_email_content, fetch_articles, send_email  # noqa: E402
 
 
 def main() -> int:
