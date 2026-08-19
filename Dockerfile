@@ -7,6 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 COPY requirements.txt ./
+COPY optio_runtime_compat ./optio_runtime_compat
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
