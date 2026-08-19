@@ -5,6 +5,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Independent of Railway: proves the repository can install, boot, and serve /login.
 jobs:
   boot-smoke:
     runs-on: ubuntu-latest
