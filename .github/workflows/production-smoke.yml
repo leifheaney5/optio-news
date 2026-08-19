@@ -24,7 +24,7 @@ jobs:
           PORT: '5055'
         run: |
           set -euo pipefail
-          python main.py > /tmp/optio.log 2>&1 &
+          python railway_entrypoint.py > /tmp/optio.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; cat /tmp/optio.log' EXIT
           for attempt in $(seq 1 30); do
@@ -66,7 +66,7 @@ jobs:
           PORT: '5056'
         run: |
           set -euo pipefail
-          python main.py > /tmp/optio-pg.log 2>&1 &
+          python railway_entrypoint.py > /tmp/optio-pg.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; cat /tmp/optio-pg.log' EXIT
           for attempt in $(seq 1 30); do
