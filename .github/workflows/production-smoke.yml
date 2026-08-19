@@ -1,0 +1,43 @@
+name: Production Smoke
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  boot-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Boot Optio and probe login
+        env:
+          DATABASE_URL: sqlite:////tmp/optio-smoke.db
+          SECRET_KEY: smoke-test-only
+          RAILWAY_ENVIRONMENT: production
+          PORT: '5055'
+        run: |
+          set -euo pipefail
+          python main.py > /tmp/optio.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; cat /tmp/optio.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error http://127.0.0.1:5055/login >/dev/null; then
+              echo "Optio boot smoke passed"
+              exit 0
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "Optio exited before becoming healthy"
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Optio did not become healthy in time"
+          exit 1
