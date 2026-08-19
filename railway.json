@@ -4,7 +4,7 @@
     "builder": "RAILPACK"
   },
   "deploy": {
-    "startCommand": "python main.py",
+    "startCommand": "python railway_entrypoint.py",
     "healthcheckPath": "/login",
     "healthcheckTimeout": 90,
     "restartPolicyType": "ON_FAILURE",
