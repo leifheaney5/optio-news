@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "python main.py",
+    "startCommand": "gunicorn main:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120 --access-logfile - --error-logfile -",
     "healthcheckPath": "/login",
     "healthcheckTimeout": 60,
     "restartPolicyType": "ON_FAILURE",
