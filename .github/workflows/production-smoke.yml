@@ -1,0 +1,80 @@
+name: Production Smoke
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  sqlite-entrypoint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Boot Railway entrypoint against SQLite
+        env:
+          DATABASE_URL: sqlite:////tmp/optio-smoke.db
+          SECRET_KEY: smoke-test-only
+          RAILWAY_ENVIRONMENT: production
+          PORT: '5055'
+        run: |
+          set -euo pipefail
+          python railway_entrypoint.py > /tmp/optio.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; cat /tmp/optio.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5055/login >/dev/null; then exit 0; fi
+            if ! kill -0 "$pid" 2>/dev/null; then exit 1; fi
+            sleep 2
+          done
+          exit 1
+
+  postgres-start-paths:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        command: ['main.py', 'railway_entrypoint.py']
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: optio
+          POSTGRES_PASSWORD: optio
+          POSTGRES_DB: optio
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U optio -d optio"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Boot ${{ matrix.command }} against Postgres
+        env:
+          DATABASE_URL: postgresql://optio:optio@127.0.0.1:5432/optio
+          SECRET_KEY: smoke-test-only
+          RAILWAY_ENVIRONMENT: production
+          PORT: '5056'
+        run: |
+          set -euo pipefail
+          python "${{ matrix.command }}" > /tmp/optio-pg.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; cat /tmp/optio-pg.log' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:5056/login >/dev/null; then exit 0; fi
+            if ! kill -0 "$pid" 2>/dev/null; then exit 1; fi
+            sleep 2
+          done
+          exit 1
