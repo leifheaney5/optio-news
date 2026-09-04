@@ -18,6 +18,7 @@
         if (menu.hidden) {
             openMenu();
             loadHiddenFeeds();
+            loadDigestPreference();
         } else {
             closeMenu();
         }
@@ -44,6 +45,50 @@
         });
     }
     applyTickerPref();
+
+    // --- Daily email roundup (server-persisted) ---
+    const digestCheck = document.getElementById('settingsDigest');
+    const digestStatus = document.getElementById('settingsDigestStatus');
+    function showDigestStatus(message, isError = false) {
+        if (!digestStatus) return;
+        digestStatus.textContent = message;
+        digestStatus.hidden = !message;
+        digestStatus.dataset.state = isError ? 'error' : 'success';
+    }
+    async function loadDigestPreference() {
+        if (!digestCheck) return;
+        try {
+            const res = await fetch('/api/digest/preferences');
+            if (!res.ok) throw new Error();
+            const data = await res.json();
+            digestCheck.checked = data.enabled === true;
+            showDigestStatus('');
+        } catch {
+            showDigestStatus("Couldn't load email preference.", true);
+        }
+    }
+    if (digestCheck) {
+        digestCheck.addEventListener('change', async () => {
+            const enabled = digestCheck.checked;
+            digestCheck.disabled = true;
+            try {
+                const res = await fetch('/api/digest/preferences', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ enabled })
+                });
+                if (!res.ok) throw new Error();
+                const data = await res.json();
+                digestCheck.checked = data.enabled === true;
+                showDigestStatus(data.enabled ? 'Daily roundup enabled.' : 'Daily roundup disabled.');
+            } catch {
+                digestCheck.checked = !enabled;
+                showDigestStatus("Couldn't save email preference.", true);
+            } finally {
+                digestCheck.disabled = false;
+            }
+        });
+    }
 
     // --- Default news view (grid | list) ---
     const viewSelect = document.getElementById('settingsViewMode');

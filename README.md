@@ -10,10 +10,10 @@
 ## Features
 
 ### Content Coverage
-- **9 News Categories**: Technology, Finance, General News, Sports, Science, Business, Entertainment, Music, and Health
+- **Curated news categories**: Technology, Finance, General News, Sports, Science, Business, Entertainment, Music, Health, Politics, Gaming, Travel, and Food
 - **70+ Premium RSS Sources**: Curated feeds from top publications across all categories
 - **27+ Additional Feeds Available**: Easily add more sources to customize your news experience
-- **Real-time Updates**: Articles cached for 30 minutes with manual refresh option
+- **Durable updates**: RSS articles are persisted by the worker and deduplicated by canonical URL
 
 ### Trending Topics
 - **Real-time Trend Analysis**: Identifies trending topics from the last 24 hours of articles
@@ -27,7 +27,7 @@
 - **Hide/Unhide Feeds**: Temporarily disable feeds you don't want without permanently removing them
 - **Add New Feeds**: Browse and activate additional RSS sources from our curated collection
 - **Search & Filter**: Quickly find specific feeds by name, URL, or category
-- **Persistent Settings**: Your feed preferences are saved and restored on restart
+- **Persistent Settings**: Per-user subscriptions and hidden-feed preferences are saved and restored on restart
 
 ### Modern Web Interface
 - **Beautiful Responsive Design**: Works seamlessly on desktop, tablet, and mobile
@@ -42,10 +42,10 @@
 - **Keyboard Shortcuts**: `Ctrl+K` to focus search, `Esc` to clear
 
 ### Email Integration
-- **Daily Digest**: Automated email delivery at 9:00 AM
+- **Daily Digest**: Opt-in per-user email delivery at 9:00 AM from Settings
 - **HTML Formatting**: Beautiful, responsive email templates
 - **Grouped by Category**: Organized presentation of articles
-- **Customizable Schedule**: Easy to adjust timing in code
+- **Customizable Schedule**: Adjust the external cron schedule for the digest process
 
 ---
 
@@ -72,14 +72,30 @@ pip install -r requirements.txt
 Create a `.env` file in the project root:
 
 ```env
+# Local development only. Production must provide its own generated value.
+SECRET_KEY=replace-with-a-long-random-value
 SENDER_EMAIL=your_gmail_address@gmail.com
 APP_PASSWORD=your_gmail_app_password
-RECEIVER_EMAIL=recipient_email_address@gmail.com
 ```
 
 > **Gmail Users**: Use an [App Password](https://myaccount.google.com/apppasswords) if you have 2FA enabled (NOT your regular password).
+> **Production**: Set `SECRET_KEY` as a Railway environment variable. Optio refuses to boot in a production environment when it is missing.
 
 ### 4. Run the Application
+
+Initialize the local database once before the first run:
+
+```bash
+python init_db.py
+```
+
+For an existing database, apply the migration history explicitly:
+
+```bash
+flask --app main db upgrade
+```
+
+Start the local development server:
 
 ```bash
 python main.py
@@ -87,13 +103,25 @@ python main.py
 
 The web interface will be available at: **http://localhost:5000**
 
+The production web process uses Gunicorn and the WSGI entrypoint:
+
+```bash
+gunicorn -w 2 -k gthread --threads 4 --timeout 60 -b 0.0.0.0:$PORT wsgi:application
+```
+
+The daily digest is a separate one-shot process. Run it from a scheduled service:
+
+```bash
+python scheduled_job.py
+```
+
 ---
 
 ## Usage
 
 ### Web Interface
 
-1. Open your browser to `http://localhost:5000`
+1. Open your browser to `http://localhost:5000`; the public landing page links to `/reader` after sign-in
 2. Browse articles from all categories or filter by specific topics
 3. Use the search bar to find articles by keyword
 4. Click category badges to filter content
@@ -116,6 +144,7 @@ The web interface will be available at: **http://localhost:5000**
 ### Email Delivery
 
 - Emails are automatically sent daily at 9:00 AM
+- Users enable delivery from the **Send me a daily news roundup** setting
 - Email contains all articles formatted in a clean, readable layout
 - Articles are grouped by category for easy navigation
 
@@ -152,20 +181,18 @@ Or use the web interface to add feeds from the available collection.
 
 ### Changing Email Schedule
 
-Modify the schedule line in `main.py`:
+Change the external cron schedule that invokes `scheduled_job.py`. For example,
+to send at 06:00 instead of 09:00:
 
-```python
-# Change from 9:00 AM to your preferred time
-schedule.every().day.at("06:00").do(job)  # 6 AM
+```cron
+# 6:00 AM
+0 6 * * * cd /path/to/Optio\ News && python3 scheduled_job.py
 ```
 
-### Adjusting Cache Duration
+### Changing ingestion frequency
 
-Update the cache timeout in the `fetch_articles` function:
-
-```python
-if age < timedelta(minutes=60):  # Change from 30 to 60 minutes
-```
+Change the cron schedule for `worker.py` in the scheduler service. The web
+process reads PostgreSQL and does not crawl feeds during a request.
 
 ### Adding New Available Feeds
 
@@ -185,10 +212,10 @@ available_feeds = {
 
 - **Backend**: Python 3.8+, Flask
 - **Frontend**: Vanilla JavaScript, CSS3, HTML5
-- **RSS Parsing**: feedparser
+- **RSS Parsing**: feedparser in the worker process
 - **Email**: smtplib with HTML templates
-- **Scheduling**: schedule library
-- **Storage**: File-based persistence for settings
+- **Storage**: SQLAlchemy with SQLite locally and PostgreSQL in production
+- **Scheduling**: External cron services invoking `worker.py` and `scheduled_job.py`
 - **Icons**: Font Awesome 6
 - **Fonts**: Inter (Google Fonts)
 
@@ -198,14 +225,22 @@ available_feeds = {
 
 ```
 Optio News/
-├── main.py                 # Flask application and RSS feed logic
+├── main.py                 # Flask application, models, and read APIs
+├── ingestion.py            # Conditional RSS ingestion and enrichment worker
+├── clustering.py           # Recent story-family clustering
+├── worker.py               # One-shot ingestion entrypoint
+├── init_db.py              # Explicit one-off database initialization
+├── scheduled_job.py        # One-shot digest entrypoint
+├── wsgi.py                 # Gunicorn WSGI entrypoint
 ├── requirements.txt        # Python dependencies
-├── hidden_feeds.txt        # User's hidden feeds (auto-generated)
+├── migrations/             # Alembic/Flask-Migrate revisions
 ├── .env                    # Environment variables (create this)
 ├── templates/
 │   ├── index.html         # Main news page
 │   └── feeds.html         # Feed management page
 └── static/
+    ├── manifest.json       # PWA metadata
+    ├── service-worker.js   # Offline shell fallback
     ├── css/
     │   ├── style.css      # Main styles
     │   └── feeds.css      # Feed management styles
@@ -221,7 +256,7 @@ Optio News/
 ### Windows (Task Scheduler)
 
 1. Open Task Scheduler
-2. Create a new task to run `python main.py` at startup
+2. Create a new task to run `python init_db.py` once, then run the web process using the Gunicorn command above
 3. Set it to run whether user is logged in or not
 
 ### Linux/Mac (cron)
@@ -229,6 +264,8 @@ Optio News/
 ```bash
 # Add to crontab (crontab -e)
 @reboot cd /path/to/Optio News && python3 main.py
+# Run the digest separately at 09:00:
+0 9 * * * cd /path/to/Optio News && python3 scheduled_job.py
 ```
 
 ### Docker (Coming Soon)

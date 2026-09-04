@@ -13,6 +13,11 @@
             <input type="checkbox" id="settingsTicker" checked>
             <span>Show headline ticker</span>
         </label>
+        <label class="settings-item">
+            <input type="checkbox" id="settingsDigest" aria-describedby="settingsDigestStatus">
+            <span>Send me a daily news roundup</span>
+        </label>
+        <p class="settings-status" id="settingsDigestStatus" role="status" aria-live="polite" hidden></p>
         <label class="settings-item settings-item--select">
             <span>Default news view</span>
             <select id="settingsViewMode" class="settings-select">

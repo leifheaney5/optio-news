@@ -1,0 +1,10 @@
+{
+  "name": "Optio.News",
+  "short_name": "Optio",
+  "start_url": "/reader",
+  "display": "standalone",
+  "background_color": "#080b18",
+  "theme_color": "#080b18",
+  "description": "See the news that matters.",
+  "icons": []
+}

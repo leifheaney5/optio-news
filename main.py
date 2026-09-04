@@ -1,34 +1,100 @@
 import os
-import time
 import logging
-import feedparser
-import schedule
 import requests as http_requests
 from datetime import datetime, timedelta, date
-from flask import Flask, render_template, jsonify, request, redirect, url_for, flash
+from flask import Flask, render_template, jsonify, request, redirect, url_for, flash, abort
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, logout_user, current_user, login_required
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from bs4 import BeautifulSoup
+from zxcvbn import zxcvbn
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
 import smtplib
-import threading
 import socket
-from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict, Counter
 import re
+from itsdangerous import URLSafeTimedSerializer, BadSignature
+from urllib.parse import urlsplit
 
-load_dotenv()
+if os.getenv('PYTHON_DOTENV_DISABLED', '').lower() not in {'1', 'true', 'yes'}:
+    load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 
 # A single unreachable feed must never hang the whole fetch
 socket.setdefaulttimeout(10)
 
+def resolve_secret_key(environ=None):
+    """Return the configured signing key, refusing known defaults in prod."""
+    environ = os.environ if environ is None else environ
+    secret_key = environ.get('SECRET_KEY')
+    if secret_key:
+        return secret_key
+
+    is_production = (
+        bool(environ.get('RAILWAY_ENVIRONMENT'))
+        or environ.get('FLASK_ENV') == 'production'
+        or environ.get('APP_ENV') == 'production'
+    )
+    if is_production:
+        raise RuntimeError('SECRET_KEY must be set in production')
+    return 'dev-only-never-deployed'
+
 app = Flask(__name__)
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret-change-in-prod')
+app.config.update(
+    SECRET_KEY=resolve_secret_key(),
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    REMEMBER_COOKIE_SECURE=True,
+    REMEMBER_COOKIE_HTTPONLY=True,
+    REMEMBER_COOKIE_SAMESITE='Lax',
+)
+csrf = CSRFProtect(app)
+
+if os.getenv('SENTRY_DSN'):
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.flask import FlaskIntegration
+        sentry_sdk.init(dsn=os.getenv('SENTRY_DSN'), integrations=[FlaskIntegration()],
+                        traces_sample_rate=float(os.getenv('SENTRY_TRACES_SAMPLE_RATE', '0.05')))
+    except ImportError:
+        logging.warning('SENTRY_DSN is set but sentry-sdk is not installed')
+
+
+def rate_limit_email_key():
+    """Return a stable limiter key for the submitted normalized email."""
+    payload = request.get_json(silent=True) or {}
+    email = request.form.get('email', '') or payload.get('email', '')
+    email = email.strip().lower()
+    return f'email:{email}' if email else get_remote_address()
+
+
+limiter = Limiter(
+    key_func=get_remote_address,
+    app=app,
+    storage_uri=os.getenv('RATELIMIT_STORAGE_URI', 'memory://'),
+    default_limits=[],
+)
+
+
+def is_common_password(password):
+    """Return true for a full-password dictionary match in the top 10,000."""
+    result = zxcvbn(password)
+    last_index = len(password) - 1
+    return any(
+        match.get('pattern') == 'dictionary'
+        and match.get('rank', float('inf')) <= 10000
+        and match.get('i') == 0
+        and match.get('j') == last_index
+        for match in result.get('sequence', [])
+    )
 
 # Fix Railway's postgres:// prefix — SQLAlchemy 2.x requires postgresql://
 _db_url = os.getenv('DATABASE_URL', 'sqlite:///optionews.db')
@@ -49,6 +115,7 @@ def redirect_www():
         return redirect(url, code=301)
 
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 
@@ -62,6 +129,10 @@ class User(UserMixin, db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     feeds = db.relationship('UserFeed', backref='user', lazy=True, cascade='all, delete-orphan')
     bookmarks = db.relationship('Bookmark', backref='user', lazy=True, cascade='all, delete-orphan')
+    subscriptions = db.relationship('Subscription', backref='user', lazy=True, cascade='all, delete-orphan')
+    article_states = db.relationship('UserArticleState', backref='user', lazy=True, cascade='all, delete-orphan')
+    digest_preferences = db.relationship('DigestPreference', backref='user', lazy=True, cascade='all, delete-orphan')
+    saved_searches = db.relationship('SavedSearch', backref='user', lazy=True, cascade='all, delete-orphan')
 
 class UserFeed(db.Model):
     __tablename__ = 'user_feeds'
@@ -93,6 +164,94 @@ class TopicStat(db.Model):
     day = db.Column(db.Date, nullable=False)
     count = db.Column(db.Integer, default=0)
     __table_args__ = (db.UniqueConstraint('topic', 'day', name='uq_topic_day'),)
+
+
+class Feed(db.Model):
+    """Durable feed catalogue shared by workers and web processes."""
+    __tablename__ = 'feeds'
+    id = db.Column(db.Integer, primary_key=True)
+    category = db.Column(db.String(64), nullable=False, index=True)
+    url = db.Column(db.String(512), unique=True, nullable=False)
+    name = db.Column(db.String(256), nullable=False)
+    active = db.Column(db.Boolean, default=True, nullable=False)
+    etag = db.Column(db.String(512))
+    last_modified = db.Column(db.String(512))
+    last_fetched_at = db.Column(db.DateTime)
+    last_success_at = db.Column(db.DateTime)
+    last_error = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    subscriptions = db.relationship('Subscription', backref='feed', lazy=True, cascade='all, delete-orphan')
+    articles = db.relationship('Article', backref='feed', lazy=True)
+
+
+class Subscription(db.Model):
+    """A user's follow/hide state for a feed; never mutate the global catalogue."""
+    __tablename__ = 'subscriptions'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    feed_id = db.Column(db.Integer, db.ForeignKey('feeds.id'), nullable=False)
+    is_hidden = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'feed_id', name='uq_subscription_user_feed'),)
+
+
+class StoryCluster(db.Model):
+    __tablename__ = 'story_clusters'
+    id = db.Column(db.Integer, primary_key=True)
+    label = db.Column(db.String(512))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    articles = db.relationship('Article', backref='cluster', lazy=True)
+
+
+class Article(db.Model):
+    __tablename__ = 'articles'
+    id = db.Column(db.Integer, primary_key=True)
+    feed_id = db.Column(db.Integer, db.ForeignKey('feeds.id'), nullable=False, index=True)
+    canonical_url = db.Column(db.String(2048), unique=True, nullable=False)
+    title = db.Column(db.String(1024), nullable=False)
+    author = db.Column(db.String(512))
+    summary = db.Column(db.Text)
+    image_url = db.Column(db.String(2048))
+    published_at = db.Column(db.DateTime, nullable=False, index=True)
+    content_hash = db.Column(db.String(64), index=True)
+    guid = db.Column(db.String(2048))
+    cluster_id = db.Column(db.Integer, db.ForeignKey('story_clusters.id'), index=True)
+    fetched_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    search_document = db.Column(db.Text)
+    states = db.relationship('UserArticleState', backref='article', lazy=True, cascade='all, delete-orphan')
+
+
+class UserArticleState(db.Model):
+    __tablename__ = 'user_article_states'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    article_id = db.Column(db.Integer, db.ForeignKey('articles.id'), nullable=False)
+    first_seen_at = db.Column(db.DateTime)
+    last_impression_at = db.Column(db.DateTime)
+    read_at = db.Column(db.DateTime)
+    dismissed_at = db.Column(db.DateTime)
+    __table_args__ = (db.UniqueConstraint('user_id', 'article_id', name='uq_article_state_user_article'),)
+
+
+class DigestPreference(db.Model):
+    __tablename__ = 'digest_preferences'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), unique=True, nullable=False)
+    enabled = db.Column(db.Boolean, default=False, nullable=False)
+    cadence = db.Column(db.String(32), default='daily', nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class SavedSearch(db.Model):
+    __tablename__ = 'saved_searches'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    search_text = db.Column('query', db.String(256), nullable=False)
+    category = db.Column(db.String(64))
+    enabled = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    __table_args__ = (db.UniqueConstraint('user_id', 'query', 'category', name='uq_saved_search_user_query_category'),)
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -252,19 +411,75 @@ rss_feeds = {
     ]
 }
 
-# Global cache for articles
-articles_cache = []
-cache_timestamp = None
-# Single-flight guard: only one thread fetches the 70+ feeds at a time
-_fetch_lock = threading.Lock()
-
 # ==================== Per-User Feed Helpers ====================
 
-def get_user_hidden_feeds(user_id):
-    """Get set of hidden feed URLs for a given user"""
+def feed_display_name(url):
+    """Use a stable host label when a feed has no editorial name."""
     try:
-        rows = UserFeed.query.filter_by(user_id=user_id, is_hidden=True).all()
-        return {row.url for row in rows}
+        return url.split('/')[2]
+    except (IndexError, AttributeError):
+        return url
+
+
+def seed_feed_catalog(commit=True):
+    """Create/update the curated feed catalogue during an explicit operation."""
+    changed = False
+    for category, urls in rss_feeds.items():
+        for url in urls:
+            feed = Feed.query.filter_by(url=url).first()
+            if feed is None:
+                db.session.add(Feed(category=category, url=url, name=feed_display_name(url)))
+                changed = True
+            elif feed.category != category or not feed.active:
+                feed.category = category
+                feed.active = True
+                changed = True
+    if commit and changed:
+        db.session.commit()
+    return changed
+
+
+def get_or_create_feed(url, category, name=None):
+    """Return a durable feed row without changing any user's subscriptions."""
+    feed = Feed.query.filter_by(url=url).first()
+    if feed is None:
+        feed = Feed(category=category, url=url, name=name or feed_display_name(url))
+        db.session.add(feed)
+        db.session.flush()
+    else:
+        feed.category = category or feed.category
+        feed.name = name or feed.name or feed_display_name(url)
+        feed.active = True
+    return feed
+
+
+def is_safe_remote_url(url):
+    """Reject malformed or local feed targets before a worker fetches them."""
+    try:
+        parts = urlsplit((url or '').strip())
+        host = (parts.hostname or '').lower()
+        return (parts.scheme in {'http', 'https'} and bool(host)
+                and not parts.username and not parts.password
+                and host not in {'localhost', '127.0.0.1', '::1', '0.0.0.0'}
+                and not host.endswith('.local'))
+    except ValueError:
+        return False
+
+
+def get_user_subscriptions(user_id):
+    return Subscription.query.filter_by(user_id=user_id).all()
+
+def get_user_hidden_feeds(user_id):
+    """Get hidden feed URLs for a given user from durable per-user state."""
+    try:
+        rows = Subscription.query.join(Feed).filter(
+            Subscription.user_id == user_id,
+            Subscription.is_hidden.is_(True)
+        ).all()
+        hidden = {row.feed.url for row in rows}
+        # Read legacy rows during the migration window so no preference is lost.
+        hidden.update(row.url for row in UserFeed.query.filter_by(user_id=user_id, is_hidden=True).all())
+        return hidden
     except Exception as e:
         logging.error(f"Error fetching hidden feeds: {e}")
         return set()
@@ -272,9 +487,12 @@ def get_user_hidden_feeds(user_id):
 def get_user_added_feeds(user_id):
     """Returns {category: [url, ...]} for feeds a user has added"""
     try:
-        rows = UserFeed.query.filter_by(user_id=user_id, is_added=True).all()
+        rows = Subscription.query.join(Feed).filter(Subscription.user_id == user_id).all()
         result = {}
         for row in rows:
+            if row.feed:
+                result.setdefault(row.feed.category, []).append(row.feed.url)
+        for row in UserFeed.query.filter_by(user_id=user_id, is_added=True).all():
             result.setdefault(row.category, []).append(row.url)
         return result
     except Exception as e:
@@ -330,168 +548,216 @@ available_feeds = {
     ]
 }
 
-def _fetch_one_feed(category, url):
-    """Fetch and parse a single RSS feed. Returns a list of article dicts."""
-    logging.info(f"Fetching: {url}")
-    out = []
+def _parse_article_cursor(cursor):
+    """Parse the stable published_at_id keyset cursor."""
+    if not cursor:
+        return None
     try:
-        feed = feedparser.parse(url)
-    except Exception as e:
-        logging.warning(f"Feed fetch failed, skipping: {url} ({e})")
-        return out
-    if feed.bozo:
-        logging.warning(f"Bad feed, skipping: {url}")
-        return out
-
-    for entry in feed.entries[:8]:
-        try:
-            # Get publication date
-            pub_date = datetime.now()
-            try:
-                if hasattr(entry, 'published_parsed') and entry.published_parsed:
-                    time_tuple = entry.published_parsed
-                    pub_date = datetime(int(time_tuple[0]), int(time_tuple[1]), int(time_tuple[2]),
-                                      int(time_tuple[3]), int(time_tuple[4]), int(time_tuple[5]))
-                elif hasattr(entry, 'updated_parsed') and entry.updated_parsed:
-                    time_tuple = entry.updated_parsed
-                    pub_date = datetime(int(time_tuple[0]), int(time_tuple[1]), int(time_tuple[2]),
-                                      int(time_tuple[3]), int(time_tuple[4]), int(time_tuple[5]))
-            except (ValueError, TypeError, IndexError):
-                # If date parsing fails, use current time
-                pass
-
-            domain = url.split('/')[2] if len(url.split('/')) > 2 else url
-
-            # Extract image from media_thumbnail, media_content, or enclosure
-            image_url = ''
-            if hasattr(entry, 'media_thumbnail') and entry.media_thumbnail:
-                image_url = entry.media_thumbnail[0].get('url', '')
-            elif hasattr(entry, 'media_content') and entry.media_content:
-                image_url = entry.media_content[0].get('url', '')
-            elif hasattr(entry, 'enclosures') and entry.enclosures:
-                for enc in entry.enclosures:
-                    if enc.get('type', '').startswith('image/'):
-                        image_url = enc.get('href', enc.get('url', ''))
-                        break
-            # Fallback: pull first <img> from summary or full-content HTML
-            if not image_url:
-                html_blobs = [getattr(entry, 'summary', '')]
-                for c in (getattr(entry, 'content', None) or []):
-                    html_blobs.append(c.get('value', ''))
-                for blob in html_blobs:
-                    m = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', blob)
-                    if m:
-                        image_url = m.group(1)
-                        break
-
-            out.append({
-                'title': entry.title,
-                'author': getattr(entry, 'author', 'N/A'),
-                'link': entry.link,
-                'summary': getattr(entry, 'summary', 'No summary available'),
-                'category': category,
-                'site': domain,
-                'feed_url': url,
-                'published': pub_date.isoformat(),
-                'published_display': pub_date.strftime('%b %d, %Y %I:%M %p'),
-                'image_url': image_url,
-            })
-        except AttributeError as e:
-            logging.warning(f"Missing attribute in entry from {url}: {e}. Skipping entry.")
-        except Exception as e:
-            logging.error(f"Error processing entry from {url}: {e}")
-    return out
+        timestamp, article_id = cursor.rsplit('_', 1)
+        return datetime.fromisoformat(timestamp), int(article_id)
+    except (ValueError, TypeError):
+        return None
 
 
-def _extract_og_image(url):
-    """Fetch a page and return its og:image / twitter:image URL, if any."""
-    try:
-        resp = http_requests.get(url, timeout=6, headers={
-            'User-Agent': 'Mozilla/5.0 (compatible; OptioBotPreview/1.0)'
-        })
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, 'lxml')
-        tag = (soup.find('meta', property='og:image')
-               or soup.find('meta', attrs={'name': 'twitter:image'})
-               or soup.find('meta', attrs={'property': 'twitter:image'}))
-        if tag and tag.get('content'):
-            img = tag['content'].strip()
-            if img.startswith('http'):
-                return img
-    except Exception:
-        pass
-    return ''
+def _article_score(article, state, source_counts, topic_counts, cluster_size):
+    """Explainable, deliberately small ranking model for a user's reader."""
+    now = datetime.utcnow()
+    age_hours = max(0.0, (now - article.published_at).total_seconds() / 3600)
+    recency = max(0.0, 1.0 - age_hours / 72.0)
+    impressions, reads = source_counts.get(article.feed_id, (0, 0))
+    source_affinity = (reads + 1) / (impressions + 2)
+    topic_key = article.feed.category if article.feed else ''
+    topic_impressions, topic_reads = topic_counts.get(topic_key, (0, 0))
+    topic_affinity = (topic_reads + 1) / (topic_impressions + 2)
+    burst = 1.0
+    cluster_signal = min(cluster_size, 5) / 5.0
+    score = (0.30 * source_affinity + 0.25 * topic_affinity
+             + 0.20 * recency + 0.15 * burst + 0.10 * cluster_signal)
+    if state and state.read_at:
+        reason = 'Previously read'
+    elif source_affinity >= 0.6:
+        reason = f'From a source you return to: {article.feed.name}'
+    elif topic_affinity >= 0.6:
+        reason = f'Fits your {topic_key} reading pattern'
+    elif cluster_size > 1:
+        reason = f'Covered by {cluster_size} sources'
+    else:
+        reason = 'Fresh from your followed sources'
+    return round(score, 4), reason
 
 
-def _enrich_missing_images(articles, max_lookups=160):
-    """For articles whose feed carried no image, pull og:image from the
-    article page itself. Runs in parallel; failures just leave the article
-    on the headline-first treatment."""
-    missing = [a for a in articles if not a.get('image_url')][:max_lookups]
-    if not missing:
-        return
-    logging.info(f"Enriching {len(missing)} articles with og:image lookups")
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        for article, img in zip(missing, pool.map(lambda a: _extract_og_image(a['link']), missing)):
-            if img:
-                article['image_url'] = img
-    found = sum(1 for a in missing if a.get('image_url'))
-    logging.info(f"og:image enrichment found {found}/{len(missing)} images")
+def _article_to_dict(article, members=None, state_map=None, reason='Fresh from your followed sources', score=0):
+    members = members or [article]
+    state_map = state_map or {}
+    states = [state_map.get(member.id) for member in members]
+    image_url = next((member.image_url.strip() for member in members
+                      if (member.image_url or '').strip()), '')
+    sources = []
+    seen_sources = set()
+    for member in members:
+        source = member.feed.name if member.feed else feed_display_name(member.canonical_url)
+        if source not in seen_sources:
+            seen_sources.add(source)
+            sources.append({'name': source, 'url': member.feed.url if member.feed else ''})
+    published = article.published_at
+    return {
+        'id': article.id,
+        'article_ids': [member.id for member in members],
+        'cluster_id': article.cluster_id or article.id,
+        'title': article.title,
+        'author': article.author or 'N/A',
+        'link': article.canonical_url,
+        'summary': article.summary or '',
+        'category': article.feed.category if article.feed else 'General News',
+        'site': article.feed.name if article.feed else feed_display_name(article.canonical_url),
+        'feed_url': article.feed.url if article.feed else '',
+        'published': published.isoformat(),
+        'published_display': published.strftime('%b %d, %Y %I:%M %p'),
+        'image_url': image_url,
+        'sources': sources,
+        'source_count': len(sources),
+        'is_read': bool(states and all(state and state.read_at for state in states)),
+        'is_seen': bool(states and any(state and state.first_seen_at for state in states)),
+        'reason': reason,
+        'score': score,
+    }
 
 
-def fetch_articles(force_refresh=False):
-    """Fetch articles from RSS feeds with caching.
+def query_persisted_articles(user_id=None, category='all', search='', unread=False,
+                             cursor=None, limit=30):
+    """Read durable content; this function never performs network I/O."""
+    limit = max(1, min(int(limit or 30), 100))
+    if user_id is None:
+        visible_feed_ids = None
+    else:
+        subscriptions = get_user_subscriptions(user_id)
+        if subscriptions:
+            visible_feed_ids = {s.feed_id for s in subscriptions if not s.is_hidden}
+        else:
+            visible_feed_ids = None  # legacy users see the curated catalogue
+    query = Article.query.join(Feed)
+    if visible_feed_ids is not None:
+        if not visible_feed_ids:
+            return [], None
+        query = query.filter(Article.feed_id.in_(visible_feed_ids))
+    if category and category != 'all':
+        query = query.filter(Feed.category == category)
+    if search:
+        term = search.strip()
+        # PostgreSQL uses its native web-search parser; SQLite remains useful
+        # for local development and tests with a bounded substring fallback.
+        if db.session.bind and db.session.bind.dialect.name == 'postgresql':
+            document = db.func.to_tsvector('english', db.func.coalesce(Article.search_document, ''))
+            query = query.filter(document.op('@@')(db.func.websearch_to_tsquery('english', term)))
+        else:
+            needle = f'%{term.lower()}%'
+            query = query.filter(db.or_(db.func.lower(Article.title).like(needle),
+                                        db.func.lower(db.func.coalesce(Article.summary, '')).like(needle)))
+    parsed_cursor = _parse_article_cursor(cursor)
+    if parsed_cursor:
+        cursor_time, cursor_id = parsed_cursor
+        query = query.filter(db.or_(Article.published_at < cursor_time,
+                                    db.and_(Article.published_at == cursor_time,
+                                            Article.id < cursor_id)))
+    query = query.order_by(Article.published_at.desc(), Article.id.desc())
+    rows = query.limit(limit * 8).all()
+    if not rows:
+        return [], None
 
-    Feeds are fetched in parallel, and only one fetch runs at a time
-    process-wide: concurrent callers get the current cache immediately
-    instead of piling up duplicate 70-feed crawls.
-    """
-    global articles_cache, cache_timestamp
+    state_map = {}
+    if user_id is not None:
+        state_map = {state.article_id: state for state in UserArticleState.query.filter(
+            UserArticleState.user_id == user_id,
+            UserArticleState.article_id.in_([row.id for row in rows])
+        ).all()}
+        rows = [row for row in rows if not state_map.get(row.id) or not state_map[row.id].dismissed_at]
+        if unread:
+            rows = [row for row in rows if not state_map.get(row.id) or not state_map[row.id].read_at]
 
-    # Return cached articles if less than 30 minutes old
-    if not force_refresh and cache_timestamp and articles_cache:
-        age = datetime.now() - cache_timestamp
-        if age < timedelta(minutes=30):
-            logging.info("Returning cached articles")
-            return articles_cache
+    source_counts = defaultdict(lambda: [0, 0])
+    topic_counts = defaultdict(lambda: [0, 0])
+    if user_id is not None:
+        history = UserArticleState.query.filter_by(user_id=user_id).all()
+        history_articles = {a.id: a for a in Article.query.filter(
+            Article.id.in_([item.article_id for item in history])
+        ).all()} if history else {}
+        for item in history:
+            historical = history_articles.get(item.article_id)
+            if not historical:
+                continue
+            source_counts[historical.feed_id][0] += 1
+            topic_counts[historical.feed.category][0] += 1
+            if item.read_at:
+                source_counts[historical.feed_id][1] += 1
+                topic_counts[historical.feed.category][1] += 1
 
-    if not _fetch_lock.acquire(blocking=False):
-        # Another thread is already crawling the feeds — serve what we have.
-        logging.info("Fetch already in progress; returning current cache")
-        return articles_cache
+    scored = []
+    cluster_sizes = {}
+    for row in rows:
+        size = len(row.cluster.articles) if row.cluster else 1
+        cluster_sizes[row.cluster_id or row.id] = size
+        score, reason = _article_score(row, state_map.get(row.id), source_counts, topic_counts, size)
+        scored.append((row, score, reason))
+    scored.sort(key=lambda item: (-item[1], -item[0].published_at.timestamp(), -item[0].id))
 
-    try:
-        # Snapshot to avoid mutation while iterating
-        pairs = [(category, url)
-                 for category, urls in rss_feeds.items()
-                 for url in list(urls)]
+    groups = []
+    group_map = {}
+    for row, score, reason in scored:
+        key = row.cluster_id or row.id
+        if cluster_sizes.get(key, 1) > 24:
+            # A bad historical cluster must not hide hundreds of unrelated
+            # stories behind one card while the next worker rebuilds it.
+            key = row.id
+        if key not in group_map:
+            group_map[key] = {'primary': row, 'members': [], 'score': score, 'reason': reason}
+            groups.append(group_map[key])
+        group_map[key]['members'].append(row)
+    groups = groups[:limit]
+    cards = [_article_to_dict(group['primary'], group['members'], state_map,
+                              group['reason'], group['score']) for group in groups]
+    last_row = groups[-1]['members'][-1] if groups else None
+    next_cursor = (f'{last_row.published_at.isoformat()}_{last_row.id}' if last_row else None)
+    return cards, next_cursor
 
-        articles = []
-        with ThreadPoolExecutor(max_workers=12) as pool:
-            for feed_articles in pool.map(lambda p: _fetch_one_feed(*p), pairs):
-                articles.extend(feed_articles)
 
-        # Image-forward: fill in missing article imagery from the pages themselves
-        _enrich_missing_images(articles)
+def fetch_articles(force_refresh=False, user_id=None):
+    """Legacy-compatible read wrapper; ingestion belongs to the worker."""
+    return query_persisted_articles(user_id=user_id)[0]
 
-        # Update cache
-        articles_cache = articles
-        cache_timestamp = datetime.now()
-        return articles
-    finally:
-        _fetch_lock.release()
+
+def query_recent_articles_for_trending(user_id, hours=24, limit=500):
+    """Return raw recent articles for trend analysis, not grouped cards."""
+    query = Article.query.join(Feed)
+    subscriptions = get_user_subscriptions(user_id)
+    if subscriptions:
+        visible_feed_ids = {s.feed_id for s in subscriptions if not s.is_hidden}
+        if not visible_feed_ids:
+            return []
+        query = query.filter(Article.feed_id.in_(visible_feed_ids))
+
+    dismissed_ids = {state.article_id for state in UserArticleState.query.filter_by(
+        user_id=user_id
+    ).all() if state.dismissed_at}
+    if dismissed_ids:
+        query = query.filter(~Article.id.in_(dismissed_ids))
+
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    rows = query.filter(Article.published_at >= cutoff).order_by(
+        Article.published_at.desc(), Article.id.desc()
+    ).limit(limit).all()
+    return [_article_to_dict(row, [row]) for row in rows]
 
 
 def cache_is_warming():
-    """True while the very first crawl is still running (no cache yet)."""
-    return cache_timestamp is None and _fetch_lock.locked()
+    """Compatibility flag retained for older clients; web reads are DB-backed."""
+    return False
 
 def extract_trending_topics(articles, top_n=10):
     """
     Extract trending topics using named-entity heuristics + article-spread scoring.
     Prefers proper nouns (people, places, orgs, events) spread across many articles.
     """
-    now = datetime.now()
+    now = datetime.utcnow()
     recent_articles = []
     for article in articles:
         try:
@@ -790,7 +1056,7 @@ def extract_trending_topics(articles, top_n=10):
 
     return trending
 
-def create_email_content(articles):
+def create_email_content(articles, unsubscribe_url=None):
     """Create HTML email content from articles"""
     import html
     from collections import defaultdict
@@ -839,18 +1105,18 @@ def create_email_content(articles):
         <hr style="margin-top: 40px; border: none; border-top: 1px solid #d1d5db;">
         <p style="text-align: center; color: #a0aec0; font-size: 12px;">
           You're receiving this because you subscribed to Optio News daily digest.
+          {f'<br><a href="{unsubscribe_url}">Unsubscribe</a>' if unsubscribe_url else ''}
         </p>
       </body>
     </html>
     """
 
-def send_email(html_content):
+def send_email(html_content, receiver):
     sender = os.getenv('SENDER_EMAIL')
-    receiver = os.getenv('RECEIVER_EMAIL')
     pwd = os.getenv('APP_PASSWORD')
     if not (sender and receiver and pwd):
-        logging.error("Missing one of SENDER_EMAIL, RECEIVER_EMAIL, APP_PASSWORD")
-        return
+        logging.warning("Digest email disabled: configure SENDER_EMAIL, APP_PASSWORD, and a recipient")
+        return False
 
     msg = MIMEMultipart('alternative')
     msg['Subject'] = "Optio News - Your Daily News Briefing"
@@ -863,15 +1129,19 @@ def send_email(html_content):
             server.login(sender, pwd)
             server.sendmail(sender, receiver, msg.as_string())
         logging.info("Email sent!")
+        return True
     except Exception as e:
         logging.error(f"Email error: {e}")
+        return False
 
 # ==================== Auth Routes ====================
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit('5 per minute', methods=['POST'])
+@limiter.limit('20 per hour', key_func=rate_limit_email_key, methods=['POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('index'))
+        return redirect(url_for('reader'))
     if request.method == 'POST':
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
@@ -879,14 +1149,16 @@ def login():
         if user and check_password_hash(user.password_hash, password):
             login_user(user)
             next_page = request.args.get('next')
-            return redirect(next_page or url_for('index'))
+            return redirect(next_page or url_for('reader'))
         flash('Invalid email or password.', 'error')
     return render_template('login.html', categories=list(rss_feeds.keys()))
 
 @app.route('/register', methods=['GET', 'POST'])
+@limiter.limit('5 per minute', methods=['POST'])
+@limiter.limit('20 per hour', key_func=rate_limit_email_key, methods=['POST'])
 def register():
     if current_user.is_authenticated:
-        return redirect(url_for('index'))
+        return redirect(url_for('reader'))
     if request.method == 'POST':
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
@@ -895,8 +1167,10 @@ def register():
             flash('Email and password are required.', 'error')
         elif password != confirm:
             flash('Passwords do not match.', 'error')
-        elif len(password) < 8:
-            flash('Password must be at least 8 characters.', 'error')
+        elif len(password) < 12:
+            flash('Password must be at least 12 characters.', 'error')
+        elif is_common_password(password):
+            flash('Choose a less common password.', 'error')
         elif User.query.filter_by(email=email).first():
             flash('An account with that email already exists.', 'error')
         else:
@@ -905,9 +1179,20 @@ def register():
                 password_hash=generate_password_hash(password)
             )
             db.session.add(user)
+            db.session.flush()
+            seed_feed_catalog(commit=False)
+            selected = [category for category in request.form.getlist('categories')
+                        if category in rss_feeds]
+            if not selected:
+                selected = list(rss_feeds.keys())[:3]
+            for category in selected:
+                for url in rss_feeds[category]:
+                    feed = get_or_create_feed(url, category)
+                    db.session.add(Subscription(user_id=user.id, feed_id=feed.id))
+            db.session.add(DigestPreference(user_id=user.id, enabled=False, cadence='daily'))
             db.session.commit()
             login_user(user)
-            return redirect(url_for('index'))
+            return redirect(url_for('reader'))
     return render_template('register.html', categories=list(rss_feeds.keys()))
 
 @app.route('/logout')
@@ -919,9 +1204,19 @@ def logout():
 # ==================== Flask Routes ====================
 
 @app.route('/')
-@login_required
 def index():
-    """Main page route"""
+    """Public front door with a small server-rendered story sample."""
+    with app.app_context():
+        seed_feed_catalog()
+        public_articles, _ = query_persisted_articles(category='all', limit=12)
+    return render_template('landing.html', categories=list(rss_feeds.keys()),
+                           articles=public_articles, user=current_user)
+
+
+@app.route('/reader')
+@login_required
+def reader():
+    """Authenticated personalized reader."""
     return render_template('index.html', categories=list(rss_feeds.keys()), user=current_user)
 
 @app.route('/feeds')
@@ -939,44 +1234,33 @@ def bookmarks_page():
 @app.route('/api/articles')
 @login_required
 def get_articles_api():
-    """API endpoint to fetch articles with filtering"""
+    """Database-only personalized article endpoint with keyset pagination."""
     category = request.args.get('category', 'all')
-    search = request.args.get('search', '').lower()
-
-    articles = fetch_articles()
-
-    # Filter out feeds hidden by this user
-    user_hidden = get_user_hidden_feeds(current_user.id)
-    if user_hidden:
-        articles = [a for a in articles if a.get('feed_url') not in user_hidden]
-
-    # Filter by category
-    if category != 'all':
-        articles = [a for a in articles if a['category'] == category]
-
-    # Filter by search term
-    if search:
-        articles = [a for a in articles if
-                    search in a['title'].lower() or
-                    search in a['summary'].lower()]
-
-    # Calculate total active feeds
-    total_feeds = sum(len(feeds) for feeds in rss_feeds.values())
-    active_feeds = total_feeds - len(user_hidden)
+    search = request.args.get('search', '').strip()
+    unread = request.args.get('unread', '').lower() in {'1', 'true', 'yes'}
+    try:
+        limit = int(request.args.get('limit', 30))
+    except ValueError:
+        limit = 30
+    articles, next_cursor = query_persisted_articles(
+        user_id=current_user.id, category=category, search=search,
+        unread=unread, cursor=request.args.get('cursor'), limit=limit,
+    )
+    unread_articles, _ = query_persisted_articles(user_id=current_user.id, unread=True, limit=100)
+    subscriptions = get_user_subscriptions(current_user.id)
+    feed_count = len({subscription.feed_id for subscription in subscriptions if not subscription.is_hidden})
+    if not subscriptions:
+        feed_count = Feed.query.filter_by(active=True).count() or sum(len(feeds) for feeds in rss_feeds.values())
 
     return jsonify({
         'articles': articles,
         'count': len(articles),
-        'cached': cache_timestamp.isoformat() if cache_timestamp else None,
-        'feed_count': active_feeds,
-        # True only during the very first crawl after startup — tells the
-        # frontend to keep its skeletons up and retry shortly.
-        'warming': cache_is_warming()
+        'next_cursor': next_cursor,
+        'feed_count': feed_count,
+        'unread_count': len(unread_articles),
+        'storage': 'database',
     })
 
-# Memoized trending results, keyed by category, valid for one article-cache
-# generation. Movement ranks persist across generations for ▲/▼ badges.
-_trending_memo = {}
 _trending_prev_ranks = {}
 
 def _apply_burst_scoring(trending):
@@ -1021,12 +1305,7 @@ def _apply_burst_scoring(trending):
 def get_trending_topics():
     """Trending topics from the last 24 hours, optionally per category."""
     category = request.args.get('category', 'all')
-    articles = fetch_articles()
-
-    # Serve memoized results while the article cache generation is unchanged
-    memo = _trending_memo.get(category)
-    if memo and memo[0] == cache_timestamp:
-        return jsonify(memo[1])
+    articles = query_recent_articles_for_trending(current_user.id)
 
     if category != 'all':
         articles = [a for a in articles if a['category'] == category]
@@ -1055,36 +1334,184 @@ def get_trending_topics():
         'period': '24 hours',
         'category': category
     }
-    _trending_memo[category] = (cache_timestamp, payload)
     logging.info(f"Trending computed for '{category}': {len(trending)} topics")
     return jsonify(payload)
 
 @app.route('/api/refresh')
 @login_required
 def refresh_articles():
-    """Force refresh articles"""
-    articles = fetch_articles(force_refresh=True)
+    """Signal that the worker should fetch; never crawl feeds in a web request."""
     return jsonify({
         'success': True,
-        'count': len(articles),
-        'timestamp': datetime.now().isoformat()
+        'status': 'worker_refresh_scheduled',
+        'timestamp': datetime.utcnow().isoformat()
     })
+
+
+# ==================== Reading State, Digest, and Alerts ====================
+
+def _mutate_article_state(field):
+    data = request.get_json(silent=True) or {}
+    raw_ids = data.get('ids', data.get('article_ids', []))
+    if isinstance(raw_ids, (int, str)):
+        raw_ids = [raw_ids]
+    article_ids = []
+    for raw_id in raw_ids or []:
+        try:
+            article_ids.append(int(raw_id))
+        except (ValueError, TypeError):
+            continue
+    article_ids = list(dict.fromkeys(article_ids))[:200]
+    now = datetime.utcnow()
+    changed = 0
+    for article_id in article_ids:
+        if not db.session.get(Article, article_id):
+            continue
+        state = UserArticleState.query.filter_by(user_id=current_user.id, article_id=article_id).first()
+        if state is None:
+            state = UserArticleState(user_id=current_user.id, article_id=article_id)
+            db.session.add(state)
+        if field == 'first_seen_at' and state.first_seen_at is None:
+            state.first_seen_at = now
+        if field == 'read_at':
+            state.read_at = now
+            state.first_seen_at = state.first_seen_at or now
+        if field == 'dismissed_at':
+            state.dismissed_at = now
+        if field == 'undismissed_at':
+            state.dismissed_at = None
+        state.last_impression_at = now
+        changed += 1
+    db.session.commit()
+    return jsonify({'success': True, 'updated': changed})
+
+
+@app.route('/api/state/seen', methods=['POST'])
+@login_required
+def mark_articles_seen():
+    return _mutate_article_state('first_seen_at')
+
+
+@app.route('/api/state/read', methods=['POST'])
+@login_required
+def mark_articles_read():
+    return _mutate_article_state('read_at')
+
+
+@app.route('/api/state/dismiss', methods=['POST'])
+@login_required
+def dismiss_articles():
+    return _mutate_article_state('dismissed_at')
+
+
+@app.route('/api/state/undismiss', methods=['POST'])
+@login_required
+def undismiss_articles():
+    return _mutate_article_state('undismissed_at')
+
+
+@app.route('/api/state/mark-all-read', methods=['POST'])
+@login_required
+def mark_all_articles_read():
+    visible, _ = query_persisted_articles(user_id=current_user.id, limit=100)
+    ids = [article_id for card in visible for article_id in card.get('article_ids', [])]
+    now = datetime.utcnow()
+    for article_id in ids:
+        state = UserArticleState.query.filter_by(user_id=current_user.id, article_id=article_id).first()
+        if state is None:
+            state = UserArticleState(user_id=current_user.id, article_id=article_id)
+            db.session.add(state)
+        state.read_at = now
+        state.first_seen_at = state.first_seen_at or now
+        state.last_impression_at = now
+    db.session.commit()
+    return jsonify({'success': True, 'updated': len(ids)})
+
+
+def _digest_serializer():
+    return URLSafeTimedSerializer(app.config['SECRET_KEY'], salt='optio-digest-unsubscribe')
+
+
+@app.route('/api/digest/preferences', methods=['GET', 'PUT', 'POST'])
+@login_required
+def digest_preferences_api():
+    preference = DigestPreference.query.filter_by(user_id=current_user.id).first()
+    if preference is None:
+        preference = DigestPreference(user_id=current_user.id, enabled=False, cadence='daily')
+        db.session.add(preference)
+    if request.method in {'PUT', 'POST'}:
+        data = request.get_json(silent=True) or request.form
+        if 'enabled' in data:
+            value = data.get('enabled')
+            preference.enabled = value if isinstance(value, bool) else str(value).lower() in {'1', 'true', 'yes', 'on'}
+        cadence = data.get('cadence')
+        if cadence in {'daily', 'weekly'}:
+            preference.cadence = cadence
+        db.session.commit()
+    return jsonify({'enabled': preference.enabled, 'cadence': preference.cadence})
+
+
+@app.route('/digest/unsubscribe/<token>')
+def digest_unsubscribe(token):
+    try:
+        payload = _digest_serializer().loads(token, max_age=60 * 60 * 24 * 90)
+        user_id = int(payload['user_id'])
+    except (BadSignature, KeyError, TypeError, ValueError):
+        abort(404)
+    preference = DigestPreference.query.filter_by(user_id=user_id).first()
+    if preference:
+        preference.enabled = False
+        db.session.commit()
+    return render_template('unsubscribe.html')
+
+
+@app.route('/api/alerts', methods=['GET', 'POST'])
+@login_required
+def saved_searches_api():
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        query_text = (data.get('query') or '').strip()[:256]
+        category = (data.get('category') or '').strip()[:64] or None
+        if not query_text:
+            return jsonify({'error': 'query required'}), 400
+        existing = SavedSearch.query.filter_by(user_id=current_user.id, search_text=query_text, category=category).first()
+        if existing:
+            existing.enabled = True
+        else:
+            db.session.add(SavedSearch(user_id=current_user.id, search_text=query_text, category=category))
+        db.session.commit()
+    alerts = SavedSearch.query.filter_by(user_id=current_user.id).order_by(SavedSearch.created_at.desc()).all()
+    return jsonify({'alerts': [{'id': a.id, 'query': a.search_text, 'category': a.category, 'enabled': a.enabled} for a in alerts]})
+
+
+@app.route('/api/alerts/<int:alert_id>', methods=['DELETE'])
+@login_required
+def delete_saved_search(alert_id):
+    alert = SavedSearch.query.filter_by(id=alert_id, user_id=current_user.id).first_or_404()
+    db.session.delete(alert)
+    db.session.commit()
+    return jsonify({'success': True})
 
 @app.route('/api/feeds')
 @login_required
 def get_feeds():
-    """Get all RSS feeds with their status for the current user"""
+    """Get the durable feed catalogue and this user's subscription state."""
+    seed_feed_catalog()
     user_hidden = get_user_hidden_feeds(current_user.id)
+    subscriptions = {subscription.feed_id: subscription for subscription in get_user_subscriptions(current_user.id)}
     feeds_list = []
-    for category, urls in rss_feeds.items():
-        for url in urls:
-            domain = url.split('/')[2] if len(url.split('/')) > 2 else url
-            feeds_list.append({
-                'url': url,
-                'category': category,
-                'name': domain,
-                'hidden': url in user_hidden
-            })
+    for feed in Feed.query.filter_by(active=True).order_by(Feed.category, Feed.name).all():
+        subscription = subscriptions.get(feed.id)
+        feeds_list.append({
+            'id': feed.id,
+            'url': feed.url,
+            'category': feed.category,
+            'name': feed.name,
+            'hidden': feed.url in user_hidden or bool(subscription and subscription.is_hidden),
+            'followed': bool(subscription and not subscription.is_hidden),
+            'last_success_at': feed.last_success_at.isoformat() if feed.last_success_at else None,
+            'last_error': feed.last_error,
+        })
     return jsonify({
         'feeds': feeds_list,
         'total': len(feeds_list),
@@ -1100,11 +1527,12 @@ def hide_feed():
     category = data.get('category', '')
     if not feed_url:
         return jsonify({'error': 'URL required'}), 400
-    existing = UserFeed.query.filter_by(user_id=current_user.id, url=feed_url).first()
+    feed = get_or_create_feed(feed_url, category)
+    existing = Subscription.query.filter_by(user_id=current_user.id, feed_id=feed.id).first()
     if existing:
         existing.is_hidden = True
     else:
-        db.session.add(UserFeed(user_id=current_user.id, category=category, url=feed_url, is_hidden=True))
+        db.session.add(Subscription(user_id=current_user.id, feed_id=feed.id, is_hidden=True))
     db.session.commit()
     user_hidden = get_user_hidden_feeds(current_user.id)
     return jsonify({'success': True, 'message': f'Feed hidden', 'hidden_count': len(user_hidden)})
@@ -1117,10 +1545,14 @@ def unhide_feed():
     feed_url = data.get('url')
     if not feed_url:
         return jsonify({'error': 'URL required'}), 400
-    existing = UserFeed.query.filter_by(user_id=current_user.id, url=feed_url).first()
+    feed = Feed.query.filter_by(url=feed_url).first()
+    existing = Subscription.query.filter_by(user_id=current_user.id, feed_id=feed.id).first() if feed else None
     if existing:
         existing.is_hidden = False
-        db.session.commit()
+    legacy = UserFeed.query.filter_by(user_id=current_user.id, url=feed_url).first()
+    if legacy:
+        legacy.is_hidden = False
+    db.session.commit()
     user_hidden = get_user_hidden_feeds(current_user.id)
     return jsonify({'success': True, 'message': f'Feed restored', 'hidden_count': len(user_hidden)})
 
@@ -1140,7 +1572,8 @@ def get_feed_suggestions():
     category = request.args.get('category', '')
     if not category or category not in available_feeds:
         return jsonify({'suggestions': []})
-    active_urls = set(rss_feeds.get(category, []))
+    active_urls = {subscription.feed.url for subscription in get_user_subscriptions(current_user.id)
+                   if subscription.feed and not subscription.is_hidden}
     suggestions = [
         f for f in available_feeds[category]
         if f['url'] not in active_urls
@@ -1150,27 +1583,24 @@ def get_feed_suggestions():
 @app.route('/api/feeds/add', methods=['POST'])
 @login_required
 def add_feed():
-    """Add a new feed to the active feeds (persisted in DB + global dict)"""
+    """Follow a feed for this user without mutating the global catalogue config."""
     data = request.json
     feed_url = data.get('url')
     category = data.get('category')
     if not feed_url or not category:
         return jsonify({'error': 'URL and category required'}), 400
+    if not is_safe_remote_url(feed_url):
+        return jsonify({'error': 'A public http(s) feed URL is required'}), 400
     if category not in rss_feeds:
         return jsonify({'error': 'Invalid category'}), 400
-    # Add to global dict so all users benefit immediately
-    if feed_url not in rss_feeds[category]:
-        rss_feeds[category].append(feed_url)
-    # Persist to DB for this user
-    existing = UserFeed.query.filter_by(user_id=current_user.id, url=feed_url).first()
+    feed = get_or_create_feed(feed_url, category)
+    existing = Subscription.query.filter_by(user_id=current_user.id, feed_id=feed.id).first()
     if existing:
-        existing.is_added = True
         existing.is_hidden = False
     else:
-        db.session.add(UserFeed(user_id=current_user.id, category=category, url=feed_url, is_added=True))
+        db.session.add(Subscription(user_id=current_user.id, feed_id=feed.id, is_hidden=False))
     db.session.commit()
-    fetch_articles(force_refresh=True)
-    return jsonify({'success': True, 'message': f'Feed added to {category}', 'url': feed_url})
+    return jsonify({'success': True, 'message': f'Feed added to {category}; worker will ingest it', 'url': feed_url})
 
 # ==================== Preview API ====================
 
@@ -1277,58 +1707,28 @@ def delete_account():
 # ==================== Scheduled Job ====================
 
 def job():
-    """Scheduled job to send email"""
-    arts = fetch_articles(force_refresh=True)
-    if arts:
-        html = create_email_content(arts)
-        send_email(html)
-        logging.info("Daily email sent successfully")
-    else:
-        logging.warning("No articles fetched for scheduled job.")
+    """Worker job: ingest once, then send each opted-in user's digest."""
+    from ingestion import ingest_once
+    result = ingest_once()
+    sent = 0
+    for preference in DigestPreference.query.filter_by(enabled=True, cadence='daily').all():
+        user_articles, _ = query_persisted_articles(user_id=preference.user_id, limit=20)
+        if not user_articles:
+            continue
+        token = _digest_serializer().dumps({'user_id': preference.user_id})
+        base_url = os.getenv('PUBLIC_BASE_URL', 'https://optio.news').rstrip('/')
+        html = create_email_content(user_articles, f'{base_url}/digest/unsubscribe/{token}')
+        if send_email(html, receiver=preference.user.email):
+            sent += 1
+    logging.info('Digest job complete: %s', {'ingestion': result, 'sent': sent})
+    return {'ingestion': result, 'sent': sent}
 
-def run_scheduler():
-    """Run the scheduler in a background thread"""
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
-
-# Schedule email for 9am daily
-schedule.every().day.at("09:00").do(job)
-
-# ==================== App Startup (runs on import + __main__) ====================
-def _startup():
-    """Initialize DB tables and re-hydrate user-added feeds. Safe to call multiple times."""
+def initialize_database():
+    """Create the current schema as an explicit one-off operation."""
     with app.app_context():
         db.create_all()
-        try:
-            added_rows = UserFeed.query.filter_by(is_added=True).all()
-            for row in added_rows:
-                if row.category in rss_feeds and row.url not in rss_feeds[row.category]:
-                    rss_feeds[row.category].append(row.url)
-            logging.info(f"Loaded {len(added_rows)} user-added feeds into rss_feeds")
-        except Exception as e:
-            logging.warning(f"Could not load user-added feeds on startup: {e}")
-
-    # Warm the article cache in the background so the first user request is fast
-    def _warm_cache():
-        with app.app_context():
-            try:
-                logging.info("Warming article cache in background...")
-                fetch_articles(force_refresh=True)
-                logging.info("Article cache warmed successfully")
-            except Exception as e:
-                logging.warning(f"Cache warm failed (non-fatal): {e}")
-
-    warm_thread = threading.Thread(target=_warm_cache, daemon=True)
-    warm_thread.start()
-
-_startup()
 
 if __name__ == "__main__":
-    # Start scheduler in background thread
-    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
-
     # Start Flask web server (use PORT env var for Railway, fallback to 5000 locally)
     port = int(os.environ.get('PORT', 5000))
     debug = os.environ.get('RAILWAY_ENVIRONMENT') is None  # disable debug in production

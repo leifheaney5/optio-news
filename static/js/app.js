@@ -5,6 +5,9 @@ let currentCategory = 'all';
 let currentSearch = '';
 let viewMode = localStorage.getItem('viewMode') || 'grid'; // 'grid' | 'list'
 let bookmarkedUrls = new Set(); // track already-bookmarked article URLs
+let unreadOnly = false;
+let seenQueue = new Set();
+let seenTimer = null;
 
 // ==================== DOM Elements ====================
 const elements = {
@@ -26,6 +29,9 @@ const elements = {
     topStories: document.getElementById('topStories'),
     topStoriesCards: document.getElementById('topStoriesCards'),
     header: document.getElementById('siteHeader')
+    ,unreadToggle: document.getElementById('unreadToggle')
+    ,unreadCount: document.getElementById('unreadCount')
+    ,markAllRead: document.getElementById('markAllRead')
 };
 
 // ==================== Image helpers ====================
@@ -98,22 +104,12 @@ async function fetchArticles(forceRefresh = false) {
             return fetchArticles(false);
         }
 
-        // Server is still doing its first crawl of the feeds — keep the
-        // skeletons up and check back in a few seconds.
-        if (data.warming && (!data.articles || data.articles.length === 0)) {
-            elements.lastUpdated.textContent = 'Warming up your feeds…';
-            setTimeout(() => fetchArticles(false), 4000);
-            return;
-        }
-
         allArticles = data.articles || [];
         applyFilters();
         updateStats(data);
 
         hideLoading();
 
-        // If the first paint happened while the server was still warming,
-        // the hero, ticker and trending rendered empty — fill them in now.
         if (allArticles.length) {
             if (currentCategory === 'all') renderTopStories(allArticles);
             const track = document.getElementById('tickerTrack');
@@ -482,7 +478,8 @@ function applyFilters() {
             article.title.toLowerCase().includes(currentSearch) ||
             article.summary.toLowerCase().includes(currentSearch);
 
-        return categoryMatch && searchMatch;
+        const unreadMatch = !unreadOnly || !article.is_read;
+        return categoryMatch && searchMatch && unreadMatch;
     });
 
     renderArticles();
@@ -559,6 +556,7 @@ function renderArticles() {
 function createArticleRow(article, index) {
     const row = document.createElement('div');
     row.className = 'article-row';
+    row.dataset.articleIds = (article.article_ids || [article.id]).join(',');
     row.style.animationDelay = `${Math.min(index, 20) * 0.02}s`;
     const isBookmarked = bookmarkedUrls.has(article.link);
     const img = usableImage(article);
@@ -578,6 +576,7 @@ function createArticleRow(article, index) {
     row.querySelector('.bookmark-btn').addEventListener('click', function() {
         bookmarkArticle(article, this);
     });
+    attachReadingState(row, article);
     return row;
 }
 
@@ -598,6 +597,7 @@ function createArticleCard(article, index) {
     const card = document.createElement('article');
     const variant = pickCardVariant(article, index);
     card.className = `news-card${variant === 'text' ? ' news-card--text' : ''}${variant === 'wide' ? ' news-card--wide' : ''}`;
+    card.dataset.articleIds = (article.article_ids || [article.id]).join(',');
     card.style.animationDelay = `${Math.min(index, 16) * 0.04}s`;
 
     // Format category for class name
@@ -655,7 +655,43 @@ function createArticleCard(article, index) {
     card.querySelector('.bookmark-btn').addEventListener('click', function() {
         bookmarkArticle(article, this);
     });
+    const link = card.querySelector('.article-title a');
+    if (link) link.addEventListener('click', () => markState('/api/state/read', article.article_ids || [article.id]));
+    attachReadingState(card, article);
     return card;
+}
+
+function markState(endpoint, ids) {
+    return fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids })
+    }).catch(() => {});
+}
+
+function queueSeen(article) {
+    (article.article_ids || [article.id]).forEach(id => seenQueue.add(id));
+    clearTimeout(seenTimer);
+    seenTimer = setTimeout(() => {
+        if (seenQueue.size) {
+            markState('/api/state/seen', Array.from(seenQueue));
+            seenQueue.clear();
+        }
+    }, 450);
+}
+
+function attachReadingState(element, article) {
+    if (!('IntersectionObserver' in window)) return;
+    if (!window.optioSeenObserver) {
+        window.optioSeenObserver = new IntersectionObserver(entries => {
+            entries.filter(entry => entry.isIntersecting).forEach(entry => {
+                queueSeen(entry.target._optioArticle);
+                window.optioSeenObserver.unobserve(entry.target);
+            });
+        }, { threshold: 0.45 });
+    }
+    element._optioArticle = article;
+    window.optioSeenObserver.observe(element);
 }
 
 // ==================== Utility Functions ====================
@@ -712,6 +748,9 @@ function updateStats(data) {
     // Update feed count
     if (data.feed_count !== undefined) {
         elements.feedCount.textContent = data.feed_count;
+    }
+    if (elements.unreadCount && data.unread_count !== undefined) {
+        elements.unreadCount.textContent = data.unread_count;
     }
 }
 
@@ -792,6 +831,24 @@ function initEventListeners() {
     // View toggle
     if (elements.viewToggle) {
         elements.viewToggle.addEventListener('click', toggleViewMode);
+    }
+
+    if (elements.unreadToggle) {
+        elements.unreadToggle.addEventListener('click', () => {
+            unreadOnly = !unreadOnly;
+            elements.unreadToggle.classList.toggle('active', unreadOnly);
+            elements.unreadToggle.setAttribute('aria-pressed', String(unreadOnly));
+            applyFilters();
+        });
+    }
+    if (elements.markAllRead) {
+        elements.markAllRead.addEventListener('click', async () => {
+            await markState('/api/state/mark-all-read', []);
+            allArticles.forEach(article => { article.is_read = true; });
+            updateStats({ unread_count: 0 });
+            applyFilters();
+            showToast('All visible stories marked read');
+        });
     }
 
     // Trending topic → filter the feed to that topic
@@ -891,6 +948,10 @@ async function init() {
 
     // Start auto-refresh
     startAutoRefresh();
+
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/static/service-worker.js').catch(() => {});
+    }
 }
 
 // Start the application when DOM is ready
