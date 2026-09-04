@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
     <title>Optio.News — Stay informed. See what matters.</title>
     <meta name="description" content="Optio.News brings the most important stories, topics, and perspectives into one intelligent reading experience.">
     <script>
@@ -28,7 +30,7 @@
                     <p class="tagline">Stay informed. See what matters.</p>
                 </div>
                 <nav class="site-nav" aria-label="Primary">
-                    <a href="/" class="site-nav-link active" aria-current="page">News</a>
+                    <a href="/reader" class="site-nav-link active" aria-current="page">News</a>
                     <a href="/feeds" class="site-nav-link">RSS Feeds</a>
                     <a href="/bookmarks" class="site-nav-link">Bookmarks</a>
                 </nav>
@@ -114,6 +116,10 @@
                         {{ category }}
                     </button>
                     {% endfor %}
+                </div>
+                <div class="reader-state-controls" role="group" aria-label="Reading state">
+                    <button type="button" class="category-btn" id="unreadToggle" aria-pressed="false">Unread <span id="unreadCount">0</span></button>
+                    <button type="button" class="category-btn" id="markAllRead">Mark all read</button>
                 </div>
             </div>
 
@@ -206,6 +212,7 @@
         </div>
     </footer>
 
+    <script src="{{ url_for('static', filename='js/csrf.js') }}"></script>
     <script src="{{ url_for('static', filename='js/app.js') }}"></script>
     <script src="{{ url_for('static', filename='js/settings.js') }}"></script>
 </body>

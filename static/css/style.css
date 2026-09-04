@@ -345,6 +345,8 @@ body {
 .settings-item:hover { background: var(--glass-chip); }
 .settings-item i { width: 18px; text-align: center; color: var(--text-tertiary); }
 .settings-item input[type="checkbox"] { accent-color: #7C5CFF; width: 16px; height: 16px; cursor: pointer; }
+.settings-status { padding: 0 12px 6px; margin: 0; color: var(--text-tertiary); font-size: 0.75rem; }
+.settings-status[data-state="error"] { color: var(--danger); }
 .settings-danger { color: var(--danger); }
 .settings-danger i { color: var(--danger); }
 .settings-divider { height: 1px; background: var(--glass-border); margin: 6px 4px; border: none; }

@@ -1,0 +1,5 @@
+Optio database migrations.
+
+Apply with `flask db upgrade` before starting a production release. The first
+revision is intentionally idempotent for existing installations created by
+the legacy `db.create_all()` initializer.
