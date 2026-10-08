@@ -106,7 +106,7 @@ The web interface will be available at: **http://localhost:5000**
 The production web process uses Gunicorn and the WSGI entrypoint:
 
 ```bash
-gunicorn -w 2 -k gthread --threads 4 --timeout 60 -b 0.0.0.0:$PORT wsgi:application
+gunicorn -w 2 -k gthread --threads 4 --timeout 60 --max-requests 500 --max-requests-jitter 50 -b 0.0.0.0:$PORT wsgi:application
 ```
 
 The daily digest is a separate one-shot process. Run it from a scheduled service:
