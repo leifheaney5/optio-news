@@ -17,7 +17,8 @@ os.environ.setdefault('SECRET_KEY', 'test-secret')
 import main
 from main import (app, db, User, UserFeed, Bookmark, Feed, Subscription,
                   Article, StoryCluster, UserArticleState, DigestPreference,
-                  SavedSearch, extract_trending_topics)
+                  SavedSearch, extract_trending_topics, get_user_history_counts,
+                  get_cluster_sizes)
 from werkzeug.security import generate_password_hash
 
 
@@ -512,6 +513,52 @@ class TestDurableReader:
     def test_url_canonicalization_removes_tracking(self):
         from ingestion import canonicalize_url
         assert canonicalize_url('HTTPS://Example.com/story/?utm_source=x&fbclid=y&ref=home') == 'https://example.com/story'
+
+    def test_user_history_counts_match_article_state_history(self, test_app):
+        from datetime import datetime
+        with test_app.app_context():
+            user = User.query.filter_by(email='unit@test.com').first()
+            feed_a = Feed(category='Technology', url='https://history-counts-a.example/feed', name='History A')
+            feed_b = Feed(category='Science', url='https://history-counts-b.example/feed', name='History B')
+            db.session.add_all([feed_a, feed_b]); db.session.flush()
+            article_a = Article(feed_id=feed_a.id, canonical_url='https://history-counts-a.example/story',
+                                title='History A', published_at=datetime.utcnow(), fetched_at=datetime.utcnow())
+            article_b = Article(feed_id=feed_b.id, canonical_url='https://history-counts-b.example/story',
+                                title='History B', published_at=datetime.utcnow(), fetched_at=datetime.utcnow())
+            db.session.add_all([article_a, article_b]); db.session.flush()
+            db.session.add_all([
+                UserArticleState(user_id=user.id, article_id=article_a.id),
+                UserArticleState(user_id=user.id, article_id=article_b.id, read_at=datetime.utcnow()),
+            ])
+            db.session.commit()
+            feed_a_id, feed_b_id = feed_a.id, feed_b.id
+
+            source_counts, topic_counts = get_user_history_counts(user.id)
+
+        assert source_counts == {feed_a_id: [1, 0], feed_b_id: [1, 1]}
+        assert topic_counts == {'Technology': [1, 0], 'Science': [1, 1]}
+
+    def test_cluster_sizes_are_loaded_as_counts(self, test_app):
+        from datetime import datetime
+        with test_app.app_context():
+            cluster = StoryCluster(label='Bounded cluster count')
+            db.session.add(cluster); db.session.flush()
+            feed = Feed(category='Science', url='https://cluster-counts.example/feed', name='Cluster Counts')
+            db.session.add(feed); db.session.flush()
+            articles = [Article(
+                feed_id=feed.id,
+                canonical_url=f'https://cluster-counts.example/story-{index}',
+                title=f'Cluster story {index}',
+                published_at=datetime.utcnow(),
+                fetched_at=datetime.utcnow(),
+                cluster_id=cluster.id,
+            ) for index in range(3)]
+            db.session.add_all(articles); db.session.commit()
+            cluster_id = cluster.id
+
+            sizes = get_cluster_sizes({cluster_id, 999999})
+
+        assert sizes == {cluster_id: 3}
 
     def test_reader_returns_one_card_for_cluster(self, auth_client, test_app):
         ids = self._seed_story(test_app, 'cluster')
