@@ -9,6 +9,8 @@ from flask_wtf.csrf import CSRFProtect
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_migrate import Migrate
+from sqlalchemy import case
+from sqlalchemy.orm import joinedload
 from werkzeug.security import generate_password_hash, check_password_hash
 from bs4 import BeautifulSoup
 from zxcvbn import zxcvbn
@@ -469,6 +471,45 @@ def is_safe_remote_url(url):
 def get_user_subscriptions(user_id):
     return Subscription.query.filter_by(user_id=user_id).all()
 
+
+def get_user_history_counts(user_id):
+    """Aggregate reading history without materializing historical ORM graphs."""
+    rows = db.session.query(
+        Article.feed_id,
+        Feed.category,
+        db.func.count(UserArticleState.id),
+        db.func.sum(case((UserArticleState.read_at.isnot(None), 1), else_=0)),
+    ).join(Article, Article.id == UserArticleState.article_id).join(
+        Feed, Feed.id == Article.feed_id
+    ).filter(UserArticleState.user_id == user_id).group_by(
+        Article.feed_id, Feed.category
+    ).all()
+
+    source_counts = {}
+    topic_counts = {}
+    for feed_id, category, impressions, reads in rows:
+        counts = [int(impressions), int(reads or 0)]
+        source_counts[feed_id] = counts
+        topic_counts[category] = [
+            topic_counts.get(category, [0, 0])[0] + counts[0],
+            topic_counts.get(category, [0, 0])[1] + counts[1],
+        ]
+    return source_counts, topic_counts
+
+
+def get_cluster_sizes(cluster_ids):
+    """Return article counts for the requested clusters in one bounded query."""
+    cluster_ids = {cluster_id for cluster_id in cluster_ids if cluster_id}
+    if not cluster_ids:
+        return {}
+    return {
+        cluster_id: int(size)
+        for cluster_id, size in db.session.query(
+            Article.cluster_id, db.func.count(Article.id)
+        ).filter(Article.cluster_id.in_(cluster_ids)).group_by(Article.cluster_id).all()
+    }
+
+
 def get_user_hidden_feeds(user_id):
     """Get hidden feed URLs for a given user from durable per-user state."""
     try:
@@ -635,7 +676,7 @@ def query_persisted_articles(user_id=None, category='all', search='', unread=Fal
             visible_feed_ids = {s.feed_id for s in subscriptions if not s.is_hidden}
         else:
             visible_feed_ids = None  # legacy users see the curated catalogue
-    query = Article.query.join(Feed)
+    query = Article.query.join(Feed).options(joinedload(Article.feed))
     if visible_feed_ids is not None:
         if not visible_feed_ids:
             return [], None
@@ -677,24 +718,14 @@ def query_persisted_articles(user_id=None, category='all', search='', unread=Fal
     source_counts = defaultdict(lambda: [0, 0])
     topic_counts = defaultdict(lambda: [0, 0])
     if user_id is not None:
-        history = UserArticleState.query.filter_by(user_id=user_id).all()
-        history_articles = {a.id: a for a in Article.query.filter(
-            Article.id.in_([item.article_id for item in history])
-        ).all()} if history else {}
-        for item in history:
-            historical = history_articles.get(item.article_id)
-            if not historical:
-                continue
-            source_counts[historical.feed_id][0] += 1
-            topic_counts[historical.feed.category][0] += 1
-            if item.read_at:
-                source_counts[historical.feed_id][1] += 1
-                topic_counts[historical.feed.category][1] += 1
+        history_sources, history_topics = get_user_history_counts(user_id)
+        source_counts.update(history_sources)
+        topic_counts.update(history_topics)
 
     scored = []
-    cluster_sizes = {}
+    cluster_sizes = get_cluster_sizes({row.cluster_id for row in rows})
     for row in rows:
-        size = len(row.cluster.articles) if row.cluster else 1
+        size = cluster_sizes.get(row.cluster_id, 1) if row.cluster_id else 1
         cluster_sizes[row.cluster_id or row.id] = size
         score, reason = _article_score(row, state_map.get(row.id), source_counts, topic_counts, size)
         scored.append((row, score, reason))
@@ -727,7 +758,7 @@ def fetch_articles(force_refresh=False, user_id=None):
 
 def query_recent_articles_for_trending(user_id, hours=24, limit=500):
     """Return raw recent articles for trend analysis, not grouped cards."""
-    query = Article.query.join(Feed)
+    query = Article.query.join(Feed).options(joinedload(Article.feed))
     subscriptions = get_user_subscriptions(user_id)
     if subscriptions:
         visible_feed_ids = {s.feed_id for s in subscriptions if not s.is_hidden}
@@ -735,11 +766,13 @@ def query_recent_articles_for_trending(user_id, hours=24, limit=500):
             return []
         query = query.filter(Article.feed_id.in_(visible_feed_ids))
 
-    dismissed_ids = {state.article_id for state in UserArticleState.query.filter_by(
-        user_id=user_id
-    ).all() if state.dismissed_at}
-    if dismissed_ids:
-        query = query.filter(~Article.id.in_(dismissed_ids))
+    dismissed_ids = UserArticleState.query.with_entities(
+        UserArticleState.article_id
+    ).filter(
+        UserArticleState.user_id == user_id,
+        UserArticleState.dismissed_at.isnot(None),
+    )
+    query = query.filter(~Article.id.in_(dismissed_ids))
 
     cutoff = datetime.utcnow() - timedelta(hours=hours)
     rows = query.filter(Article.published_at >= cutoff).order_by(
