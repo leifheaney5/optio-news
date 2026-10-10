@@ -703,7 +703,48 @@ class TestDurableReader:
         with test_app.app_context():
             result = ingest_once()
             assert result['inserted'] >= 1
+            assert result['pruned'] is None
             assert Article.query.filter_by(canonical_url='https://worker.example/story').count() == 1
+
+    def test_article_retention_is_disabled_unless_configured(self, monkeypatch):
+        from ingestion import article_retention_days
+        monkeypatch.delenv('OPTIO_ARTICLE_RETENTION_DAYS', raising=False)
+        assert article_retention_days() is None
+        for raw, expected in [('30', 30), (' 14 ', 14), ('0', None), ('-5', None), ('abc', None)]:
+            monkeypatch.setenv('OPTIO_ARTICLE_RETENTION_DAYS', raw)
+            assert article_retention_days() == expected
+
+    def test_prune_old_articles_keeps_recent_and_stateful_articles(self, test_app):
+        from datetime import datetime, timedelta
+        from ingestion import prune_old_articles
+        with test_app.app_context():
+            user = User.query.filter_by(email='unit@test.com').first()
+            feed = Feed(category='Science', url='https://retention.example/feed', name='Retention')
+            db.session.add(feed); db.session.flush()
+            stale_cluster = StoryCluster(label='Retention stale cluster')
+            db.session.add(stale_cluster); db.session.flush()
+            old = datetime.utcnow() - timedelta(days=45)
+
+            def article(slug, published, **extra):
+                return Article(feed_id=feed.id, canonical_url=f'https://retention.example/{slug}',
+                               title=slug, published_at=published, fetched_at=published, **extra)
+
+            stale = article('stale', old, cluster_id=stale_cluster.id)
+            stale_two = article('stale-two', old)
+            with_history = article('read-history', old)
+            fresh = article('fresh', datetime.utcnow())
+            db.session.add_all([stale, stale_two, with_history, fresh]); db.session.flush()
+            db.session.add(UserArticleState(user_id=user.id, article_id=with_history.id, read_at=old))
+            db.session.commit()
+            cluster_id = stale_cluster.id
+
+            result = prune_old_articles(30, batch_size=1)
+
+            remaining = {a.canonical_url for a in Article.query.filter(
+                Article.canonical_url.like('https://retention.example/%'))}
+            assert remaining == {'https://retention.example/read-history', 'https://retention.example/fresh'}
+            assert db.session.get(StoryCluster, cluster_id) is None
+            assert result['articles'] >= 2
 
 
 # ──────────────────────────────────────────────
