@@ -6,9 +6,10 @@ normal page and API requests never call the network.
 
 import calendar
 import logging
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import feedparser
@@ -200,5 +201,51 @@ def ingest_once():
 
     from clustering import recluster_recent
     clustered = recluster_recent()
-    logging.info('Ingestion complete: %d inserted, %d updated, %d recent clusters', inserted, updated, clustered)
-    return {'feeds': len(feeds), 'inserted': inserted, 'updated': updated, 'clusters': clustered}
+
+    retention_days = article_retention_days()
+    pruned = prune_old_articles(retention_days) if retention_days else None
+    logging.info('Ingestion complete: %d inserted, %d updated, %d recent clusters, pruned %s',
+                 inserted, updated, clustered, pruned)
+    return {'feeds': len(feeds), 'inserted': inserted, 'updated': updated, 'clusters': clustered,
+            'pruned': pruned}
+
+
+def article_retention_days():
+    """Days of articles to keep, from OPTIO_ARTICLE_RETENTION_DAYS.
+
+    Unset, non-numeric, or non-positive values disable pruning, so nothing is
+    deleted until the variable is deliberately set."""
+    raw = os.environ.get('OPTIO_ARTICLE_RETENTION_DAYS', '').strip()
+    try:
+        days = int(raw)
+    except ValueError:
+        return None
+    return days if days > 0 else None
+
+
+def prune_old_articles(retention_days, batch_size=1000, now=None):
+    """Delete articles published before the retention window, in batches.
+
+    Articles with any per-user state (impressions, reads, dismissals) are kept
+    so history-based ranking survives; bookmarks store their own URL and title
+    and do not reference article rows. Story clusters left without articles are
+    removed afterwards."""
+    from main import Article, StoryCluster, UserArticleState, db
+
+    cutoff = (now or datetime.utcnow()) - timedelta(days=retention_days)
+    stateful = db.session.query(UserArticleState.article_id)
+    deleted = 0
+    while True:
+        ids = [row.id for row in db.session.query(Article.id).filter(
+            Article.published_at < cutoff,
+            ~Article.id.in_(stateful),
+        ).limit(batch_size)]
+        if not ids:
+            break
+        deleted += Article.query.filter(Article.id.in_(ids)).delete(synchronize_session=False)
+        db.session.commit()
+
+    populated = db.session.query(Article.cluster_id).filter(Article.cluster_id.isnot(None))
+    clusters = StoryCluster.query.filter(~StoryCluster.id.in_(populated)).delete(synchronize_session=False)
+    db.session.commit()
+    return {'articles': deleted, 'clusters': clusters, 'cutoff': cutoff.isoformat()}
