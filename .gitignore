@@ -17,3 +17,6 @@ venv/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Railway IaC SDK (installed under .railway/)
+.railway/node_modules/
