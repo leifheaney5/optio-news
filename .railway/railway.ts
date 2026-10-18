@@ -37,7 +37,7 @@ export default defineRailway(() => {
     env: { DATABASE_URL: preserve(), PORT: preserve(), PUBLIC_BASE_URL: preserve(), RATELIMIT_STORAGE_URI: preserve(), SECRET_KEY: preserve() },
   });
 
-  return project("optio-news-website", {
+  return project("optio-news", {
     resources: [Postgres, optioDigest, Redis, optioIngest, optioNews, postgresVolume, redisVolume],
   });
 });
