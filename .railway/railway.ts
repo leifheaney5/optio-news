@@ -1,4 +1,4 @@
-import { bucket, defineRailway, github, postgres, preserve, project, redis, service, volume } from "railway/iac";
+import { defineRailway, github, postgres, preserve, project, redis, service, volume } from "railway/iac";
 
 export default defineRailway(() => {
   const Postgres = postgres("Postgres", { region: "us-west2" });
@@ -6,7 +6,6 @@ export default defineRailway(() => {
   Redis.deploy = { startCommand: "/bin/sh -c \"rm -rf $RAILWAY_VOLUME_MOUNT_PATH/lost+found/ && exec docker-entrypoint.sh redis-server --requirepass $REDIS_PASSWORD --save 60 1 --dir $RAILWAY_VOLUME_MOUNT_PATH\"" };
   const postgresVolume = volume("postgres-volume", { alerts: { usage: { "100": {}, "80": {}, "95": {} } }, allowOnlineResize: true, region: "us-west2", sizeMB: 5000 });
   const redisVolume = volume("redis-volume", { alerts: { usage: { "100": {}, "80": {}, "95": {} } }, allowOnlineResize: true, region: "us-west2", sizeMB: 50000 });
-  const PostgresPITR = bucket("Postgres-PITR", { region: "sjc" });
   const optioDigest = service("optio-digest", {
     source: github("leifheaney5/optio-news", { checkSuites: false }),
     build: { buildEnvironment: "V3", builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
@@ -39,6 +38,6 @@ export default defineRailway(() => {
   });
 
   return project("optio-news-website", {
-    resources: [Postgres, optioDigest, Redis, optioIngest, optioNews, postgresVolume, redisVolume, PostgresPITR],
+    resources: [Postgres, optioDigest, Redis, optioIngest, optioNews, postgresVolume, redisVolume],
   });
 });
