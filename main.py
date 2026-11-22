@@ -1740,11 +1740,20 @@ def delete_account():
 # ==================== Scheduled Job ====================
 
 def job():
-    """Worker job: ingest once, then send each opted-in user's digest."""
+    """Refresh articles and send the daily digest when delivery is possible."""
+    if not (os.getenv('SENDER_EMAIL') and os.getenv('APP_PASSWORD')):
+        logging.info('Skipping daily digest: email delivery is unconfigured')
+        return {'ingestion': None, 'sent': 0}
+
+    preferences = DigestPreference.query.filter_by(enabled=True, cadence='daily')
+    if preferences.with_entities(DigestPreference.user_id).first() is None:
+        logging.info('Skipping daily digest: no opted-in daily subscribers')
+        return {'ingestion': None, 'sent': 0}
+
     from ingestion import ingest_once
     result = ingest_once()
     sent = 0
-    for preference in DigestPreference.query.filter_by(enabled=True, cadence='daily').all():
+    for preference in preferences.all():
         user_articles, _ = query_persisted_articles(user_id=preference.user_id, limit=20)
         if not user_articles:
             continue
