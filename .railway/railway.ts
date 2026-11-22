@@ -27,7 +27,7 @@ export default defineRailway(() => {
   const optioNews = service("optio-news", {
     source: github("leifheaney5/optio-news", { checkSuites: false }),
     build: { builder: "DOCKERFILE", dockerfilePath: "Dockerfile" },
-    start: "sh -c 'gunicorn -w 2 -k gthread --threads 4 --timeout 60 --max-requests 500 --max-requests-jitter 50 -b 0.0.0.0:${PORT:-8080} wsgi:application'",
+    start: "sh -c 'gunicorn -k gthread --threads 4 --timeout 60 --max-requests 500 --max-requests-jitter 50 -b 0.0.0.0:${PORT:-8080} wsgi:application'",
     preDeploy: "flask --app main db upgrade",
     healthcheck: "/login",
     healthcheckTimeout: 90,

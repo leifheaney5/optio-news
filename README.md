@@ -106,14 +106,21 @@ The web interface will be available at: **http://localhost:5000**
 The production web process uses Gunicorn and the WSGI entrypoint:
 
 ```bash
-gunicorn -w 2 -k gthread --threads 4 --timeout 60 --max-requests 500 --max-requests-jitter 50 -b 0.0.0.0:$PORT wsgi:application
+gunicorn -k gthread --threads 4 --timeout 60 --max-requests 500 --max-requests-jitter 50 -b 0.0.0.0:$PORT wsgi:application
 ```
+
+Gunicorn defaults to one worker. Set `WEB_CONCURRENCY=2` to restore two workers
+if request latency or error rates increase at peak traffic.
 
 The daily digest is a separate one-shot process. Run it from a scheduled service:
 
 ```bash
 python scheduled_job.py
 ```
+
+The digest skips its feed refresh when `SENDER_EMAIL` or `APP_PASSWORD` is
+missing, or when no users have opted in to a daily digest. The hourly ingestion
+worker continues to refresh the feed.
 
 ---
 

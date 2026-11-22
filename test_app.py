@@ -931,6 +931,59 @@ class TestSecurity:
         scheduled_job.run_job()
         assert contexts == [True]
 
+    @pytest.mark.parametrize('mail_configured, daily_subscriber', [
+        (False, True),
+        (True, False),
+        (True, True),
+    ])
+    def test_digest_only_ingests_when_it_can_send(
+        self, test_app, monkeypatch, mail_configured, daily_subscriber
+    ):
+        if mail_configured:
+            monkeypatch.setenv('SENDER_EMAIL', 'sender@example.com')
+            monkeypatch.setenv('APP_PASSWORD', 'test-only')
+        else:
+            monkeypatch.delenv('SENDER_EMAIL', raising=False)
+            monkeypatch.delenv('APP_PASSWORD', raising=False)
+
+        refreshed = []
+        sent = []
+        result = {'feeds': 1}
+
+        def ingest_once():
+            refreshed.append(True)
+            return result
+
+        def send_email(html, receiver):
+            sent.append(receiver)
+            return True
+
+        monkeypatch.setattr('ingestion.ingest_once', ingest_once)
+        monkeypatch.setattr(main, 'query_persisted_articles', lambda **kwargs: ([{}], 1))
+        monkeypatch.setattr(main, 'create_email_content', lambda *args: '<p>Digest</p>')
+        monkeypatch.setattr(main, 'send_email', send_email)
+
+        with test_app.app_context():
+            DigestPreference.query.update({DigestPreference.enabled: False})
+            user = User.query.filter_by(email='unit@test.com').one()
+            preference = DigestPreference.query.filter_by(user_id=user.id).first()
+            if preference is None:
+                preference = DigestPreference(user_id=user.id)
+                db.session.add(preference)
+            preference.enabled = daily_subscriber
+            preference.cadence = 'daily'
+            try:
+                if mail_configured and daily_subscriber:
+                    assert main.job() == {'ingestion': result, 'sent': 1}
+                    assert refreshed == [True]
+                    assert sent == [user.email]
+                else:
+                    assert main.job() == {'ingestion': None, 'sent': 0}
+                    assert refreshed == []
+                    assert sent == []
+            finally:
+                db.session.rollback()
+
     def test_password_policy_rejects_eleven_characters(self, client, test_app):
         email = 'eleven@optio.news'
         r = client.post('/register', data={
