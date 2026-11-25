@@ -13,7 +13,6 @@ from sqlalchemy import case
 from sqlalchemy.orm import joinedload
 from werkzeug.security import generate_password_hash, check_password_hash
 from bs4 import BeautifulSoup
-from zxcvbn import zxcvbn
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from dotenv import load_dotenv
@@ -88,6 +87,8 @@ limiter = Limiter(
 
 def is_common_password(password):
     """Return true for a full-password dictionary match in the top 10,000."""
+    from zxcvbn import zxcvbn
+
     result = zxcvbn(password)
     last_index = len(password) - 1
     return any(
