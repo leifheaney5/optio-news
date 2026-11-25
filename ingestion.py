@@ -143,8 +143,24 @@ def ingest_once():
         for snapshot in pool.map(_snapshot, payloads):
             snapshots.append(snapshot)
 
-    all_records = [record for snapshot in snapshots for record in snapshot['records']]
-    _enrich_records(all_records)
+    image_candidates = []
+    for snapshot in snapshots:
+        for record in snapshot['records']:
+            record['canonical_url'] = canonicalize_url(record.get('canonical_url', ''))
+            if record['canonical_url'] and not record.get('image_url'):
+                image_candidates.append(record)
+
+    # The upsert keeps a stored image. Skip the page request when it could
+    # only produce a value that the upsert would discard.
+    candidate_urls = list(dict.fromkeys(record['canonical_url'] for record in image_candidates))
+    stored_image_urls = set()
+    for start in range(0, len(candidate_urls), 500):
+        stored_image_urls.update(url for (url,) in db.session.query(Article.canonical_url).filter(
+            Article.canonical_url.in_(candidate_urls[start:start + 500]),
+            Article.image_url != '',
+        ))
+    _enrich_records([record for record in image_candidates
+                     if record['canonical_url'] not in stored_image_urls])
     now = datetime.utcnow()
     inserted = 0
     updated = 0
@@ -163,7 +179,6 @@ def ingest_once():
         elif snapshot.get('error'):
             feed.last_error = snapshot['error']
         for record in snapshot['records']:
-            record['canonical_url'] = canonicalize_url(record.get('canonical_url', ''))
             if not record['canonical_url']:
                 continue
             existing = Article.query.filter_by(canonical_url=record['canonical_url']).first()

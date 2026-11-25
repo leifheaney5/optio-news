@@ -692,19 +692,32 @@ class TestDurableReader:
                 feed = Feed(category='Science', url='https://worker.example/feed', name='Worker Source')
                 db.session.add(feed); db.session.commit()
             feed_id = feed.id
+        story = {
+            'canonical_url': 'https://worker.example/story?utm_source=email',
+            'title': 'Worker persisted story', 'author': '', 'summary': 'A durable article',
+            'image_url': 'https://worker.example/image.jpg', 'published_at': datetime.utcnow(), 'guid': 'worker-1'
+        }
+        articles = [story]
         monkeypatch.setattr('ingestion._snapshot', lambda payload: {
-            'feed_id': feed_id, 'status': 200, 'records': [{
-                'canonical_url': 'https://worker.example/story?utm_source=email',
-                'title': 'Worker persisted story', 'author': '', 'summary': 'A durable article',
-                'image_url': 'https://worker.example/image.jpg', 'published_at': datetime.utcnow(), 'guid': 'worker-1'
-            }], 'etag': None, 'last_modified': None, 'error': None
+            'feed_id': payload[0], 'status': 200,
+            'records': [record.copy() for record in articles] if payload[0] == feed_id else [],
+            'etag': None, 'last_modified': None, 'error': None
         })
-        monkeypatch.setattr('ingestion._enrich_records', lambda records: None)
+        requested_images = []
+        monkeypatch.setattr('ingestion._enrich_records',
+                            lambda records: requested_images.extend(record['canonical_url'] for record in records))
         with test_app.app_context():
             result = ingest_once()
             assert result['inserted'] >= 1
             assert result['pruned'] is None
             assert Article.query.filter_by(canonical_url='https://worker.example/story').count() == 1
+
+            story['image_url'] = ''
+            articles.append({**story, 'canonical_url': 'https://worker.example/new', 'guid': 'worker-2'})
+            ingest_once()
+            assert requested_images == ['https://worker.example/new']
+            persisted = Article.query.filter_by(canonical_url='https://worker.example/story').one()
+            assert persisted.image_url == 'https://worker.example/image.jpg'
 
     def test_article_retention_is_disabled_unless_configured(self, monkeypatch):
         from ingestion import article_retention_days
