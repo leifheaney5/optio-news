@@ -10,6 +10,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from time import monotonic
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import feedparser
@@ -139,10 +140,13 @@ def ingest_once():
     feeds = Feed.query.filter_by(active=True).all()
     payloads = [(feed.id, feed.url, feed.etag, feed.last_modified) for feed in feeds]
     snapshots = []
+    fetch_started = monotonic()
     with ThreadPoolExecutor(max_workers=12) as pool:
         for snapshot in pool.map(_snapshot, payloads):
             snapshots.append(snapshot)
+    fetch_seconds = monotonic() - fetch_started
 
+    images_started = monotonic()
     image_candidates = []
     for snapshot in snapshots:
         for record in snapshot['records']:
@@ -161,6 +165,8 @@ def ingest_once():
         ))
     _enrich_records([record for record in image_candidates
                      if record['canonical_url'] not in stored_image_urls])
+    image_seconds = monotonic() - images_started
+    writes_started = monotonic()
     now = datetime.utcnow()
     inserted = 0
     updated = 0
@@ -213,12 +219,18 @@ def ingest_once():
                 ))
                 inserted += 1
     db.session.commit()
+    write_seconds = monotonic() - writes_started
 
     from clustering import recluster_recent
+    cluster_started = monotonic()
     clustered = recluster_recent()
+    cluster_seconds = monotonic() - cluster_started
 
+    prune_started = monotonic()
     retention_days = article_retention_days()
     pruned = prune_old_articles(retention_days) if retention_days else None
+    logging.info('Ingestion timings in seconds feeds=%.2f images=%.2f writes=%.2f clustering=%.2f pruning=%.2f',
+                 fetch_seconds, image_seconds, write_seconds, cluster_seconds, monotonic() - prune_started)
     logging.info('Ingestion complete: %d inserted, %d updated, %d recent clusters, pruned %s',
                  inserted, updated, clustered, pruned)
     return {'feeds': len(feeds), 'inserted': inserted, 'updated': updated, 'clusters': clustered,
