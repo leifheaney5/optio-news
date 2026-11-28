@@ -4,6 +4,8 @@ import re
 from collections import defaultdict
 from datetime import datetime, timedelta
 
+from sqlalchemy.orm import joinedload, load_only
+
 
 STOPWORDS = {
     # Grammar and common RSS boilerplate must not join unrelated stories.
@@ -52,7 +54,15 @@ def recluster_recent(hours=36):
     from main import Article, StoryCluster, db
 
     cutoff = datetime.utcnow() - timedelta(hours=hours)
-    articles = Article.query.filter(Article.published_at >= cutoff).order_by(Article.published_at.asc()).all()
+    articles = (
+        Article.query.options(
+            load_only(Article.id, Article.title, Article.summary, Article.cluster_id),
+            joinedload(Article.cluster).load_only(StoryCluster.id),
+        )
+        .filter(Article.published_at >= cutoff)
+        .order_by(Article.published_at.asc())
+        .all()
+    )
     if not articles:
         return 0
     token_sets = {article.id: _tokens(article) for article in articles}
